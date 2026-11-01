@@ -1,0 +1,23 @@
+# macOS 系统文件
+.DS_Store
+
+# 本地配置与环境变量（数据路径、个人配置，绝不上传）
+.env
+*.env
+
+# 日志
+*.log
+dsh-log/
+
+# 个人业务数据（app.db 等，含 API Key，绝不上传）
+data/
+
+# Python 缓存
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# 历史归档与本地产物
+_backup/
+_shots/

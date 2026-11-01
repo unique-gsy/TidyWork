@@ -1,0 +1,6 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+openai>=1.30  # 已在 3.10.0 验证；1.x+ 均含所需异常类
+httpx>=0.27
+python-multipart>=0.0.9

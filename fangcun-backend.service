@@ -1,0 +1,15 @@
+[Unit]
+Description=Fangcun Workbench Backend (FastAPI + DSH agent)
+After=network.target
+
+[Service]
+Type=simple
+User=guosy
+WorkingDirectory=/home/guosy/fangcun/backend
+Environment=HOME=/home/guosy
+ExecStart=/home/guosy/fangcun/backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+# Docker build context（WorkBoard 根）忽略项 —— 仅影响镜像构建，不删除任何本地文件
+_shots/
+_backup/
+data/
+dsh-log/
+docker/
+*.log
+.git/
+.DS_Store

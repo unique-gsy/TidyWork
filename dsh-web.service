@@ -1,0 +1,16 @@
+[Unit]
+Description=DSH Web UI (DeepSeek Harness)
+After=network.target
+
+[Service]
+Type=simple
+User=guosy
+Environment=HOME=/home/guosy
+ExecStart=/bin/bash -lc 'export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; exec dsh web --no-open'
+StandardOutput=append:/home/guosy/dsh-web.log
+StandardError=append:/home/guosy/dsh-web-error.log
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

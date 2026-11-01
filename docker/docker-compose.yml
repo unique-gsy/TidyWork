@@ -1,0 +1,84 @@
+# ============================================================================
+# 方寸 × DSH 深度集成 · 一键部署（OrbStack / Docker 通用）
+# 用法：必须在本文件所在目录（docker/）执行  docker compose up -d --build
+#       因为 build.context 是相对本文件的位置；从别处执行会找不到构建上下文
+# 访问：http://localhost:8080 ，浏览器内「⇄ DSH」切换，右上角「⇄ 方寸」切回
+#
+# 容器：TidyWork（方寸后端，对外 8080，含 /dsh/* 反向代理 + ws 代理）
+#       DSH      （DeepSeek Harness，内部 3080，不暴露到宿主机）
+# 数据：默认 /Users/guosy/Documents/TidyWork/  宿主机目录 —— 个人数据
+#       data/      方寸业务数据（待办/会议/记账/笔记）
+#       dsh-log/   DSH token 日志（DSH 写、TidyWork 读，token 自动解析）
+# 自定义数据位置：复制 docker/.env.example 为 docker/.env 并改 TIDYWORK_DATA_DIR
+#       （本文件所有宿主机数据路径均以 ${TIDYWORK_DATA_DIR:-默认值} 插值，见下方 volumes）
+# ============================================================================
+
+# 项目名：所有自动创建的资源（网络、卷等）都以 tidywork 为前缀，
+# 例如默认网络名为 tidywork_default；多个 compose 项目并存时靠它隔离。
+name: tidywork
+
+services:
+  # 每个 service 对应一个（或一组）容器；服务名同时是容器间 DNS 名，
+  # 下方 DSH 地址 http://dsh:3080 能解析，就依赖这个命名机制。
+
+  # --------------------------------------------------------------------------
+  # TidyWork 容器：方寸后端（FastAPI）
+  # --------------------------------------------------------------------------
+  tidywork:
+    build:
+      # 以 WorkBoard 根目录为构建上下文，Dockerfile 里 COPY backend/... 相对它；
+      # 每次 build 直接用本地 backend/ 最新代码，改代码→重建即生效。
+      # 同目录 .dockerignore（_shots/_backup/data/dsh-log 等）先过滤无关大目录。
+      context: ..
+      dockerfile: docker/tidywork/Dockerfile
+    # 固定容器显示名：OrbStack/Docker 列表里即为「TidyWork」。
+    # 注意：固定名后 docker compose scale 多副本不可用（个人单机部署无需，可接受）。
+    container_name: TidyWork
+    # 异常退出自动拉起；手动 docker compose stop 后不自动重启。
+    # 对应原虚拟机 systemd 的 Restart=on-failure。
+    restart: unless-stopped
+    ports:
+      # 宿主端口:容器端口。浏览器访问 http://localhost:8080 即进方寸。
+      # 8080 被占用时改左边，如 "18080:8080"，无需动代码。
+      - "8080:8080"
+    environment:
+      # 容器内 DSH 地址：用 compose 服务名 dsh 解析（容器间经内置 DNS 互通，
+      # 替代原代码硬编码的 127.0.0.1:3080）；对应 dsh_web.py 的 os.environ.get 读取。
+      DSH_WEB_BASE: http://dsh:3080
+      # DSH token 日志路径：指向共享挂载点，ensure_auth 自动从该文件解析 token。
+      DSH_LOG_PATH: /dsh-log/dsh-web.log
+      # 方寸业务数据目录：后端 config.get_data_dir() 读取，必须与下方挂载 target 一致
+      WORKBENCH_DATA: /home/tidywork/data
+      # dsh_proxy 反向代理的目标与信任改写（HTTP Origin / WS Host+Origin），
+      # 容器内指向 DSH 服务名，保证 DSH 信任栅栏放行
+      DSH_ORIGIN: http://dsh:3080/
+      DSH_WS_BASE: ws://dsh:3080
+      DSH_WS_HOST: dsh:3080
+    volumes:
+      # 方寸业务数据持久化到宿主机（默认 /Users/guosy/Documents/TidyWork/data/，
+      # 可用环境变量 TIDYWORK_DATA_DIR 整体改位置）：
+      # 容器重建不丢、Finder 直接可见可备份。
+      - ${TIDYWORK_DATA_DIR:-/Users/guosy/Documents/TidyWork}/data:/home/tidywork/data
+      # 只读挂载 DSH 日志目录：TidyWork 只需读 token、不能写（权限最小化）。
+      - ${TIDYWORK_DATA_DIR:-/Users/guosy/Documents/TidyWork}/dsh-log:/dsh-log:ro
+    depends_on:
+      # 仅保证启动顺序（先 dsh 后 tidywork），不保证 dsh 内部就绪；
+      # 方寸 ensure_auth 失败会自动容错/重试，因此足够。
+      - dsh
+
+  # --------------------------------------------------------------------------
+  # DSH 容器：DeepSeek Harness（dsh web）
+  # --------------------------------------------------------------------------
+  dsh:
+    # 简写：构建上下文为 docker/dsh/ 目录，用其下 Dockerfile。
+    build: ./dsh
+    # 固定容器显示名：OrbStack/Docker 列表里即为「DSH」。
+    container_name: DSH
+    # 同 TidyWork：异常退出自动拉起，对应原 dsh-web.service 的 Restart=on-failure。
+    restart: unless-stopped
+    volumes:
+      # dsh web 的 stdout（含 token）写入宿主机 dsh-log/（路径同受 TIDYWORK_DATA_DIR 控制）；
+      # 注意此处无 :ro —— DSH 需要写，TidyWork 以只读挂载同一目录，一写一读完成 token 流转。
+      - ${TIDYWORK_DATA_DIR:-/Users/guosy/Documents/TidyWork}/dsh-log:/dsh-log
+    # 故意不写 ports：DSH 不出宿主机，只有同一 compose 网络内的 TidyWork
+    # 能经 http://dsh:3080 访问，比虚拟机形态下 3080 对宿主机可见更安全。
