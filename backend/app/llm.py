@@ -14,6 +14,8 @@ from datetime import datetime
 
 import httpx
 
+import os
+
 from . import config, db, timex
 from .schemas import ParseOutput, RecognitionOutput
 
@@ -93,7 +95,7 @@ def load_slot(slot: str) -> SlotConfig:
     return SlotConfig(
         slot=slot,
         base_url=db.get_setting(f"{slot}.base_url").strip(),
-        api_key=db.get_setting(f"{slot}.api_key"),
+        api_key=os.environ.get("DEEPSEEK_API_KEY", ""),  # Key 只配置在 DSH 容器侧
         model=db.get_setting(f"{slot}.model").strip(),
         read_timeout=float(db.get_setting(f"{slot}.timeout", "60")),
     )

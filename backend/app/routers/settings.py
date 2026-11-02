@@ -1,27 +1,22 @@
-"""路由：设置（模型分槽配置 / 密钥脱敏 / 测试连接）+ 备份 + 健康检查。
+"""路由：设置（模型分槽 / 备份 / 健康检查）。
 
-三条硬规则（架构 3.2）：
-1. GET /api/settings 永不返回明文密钥，只返回 ****+末4位；
-2. PUT /api/settings 的 api_key 留空 = 保持不变；
-3. 日志与错误信息不落 api_key（logging 脱敏过滤器见 main.py）。
+v2 调整：DeepSeek API Key 只配置在 DSH 容器侧（docker-compose 的 dsh 服务
+environment，值来自宿主机 docker/.env），TidyWork 不再读写 Key 槽：
+- GET /api/settings 不再返回任何密钥相关字段；
+- PUT /api/settings 不再接受 api_key（历史表数据保留，但无人读写）。
 """
 from fastapi import APIRouter, HTTPException
 from zoneinfo import ZoneInfo
 
-from .. import db, llm
-from ..logging_setup import scrubber
-from ..schemas import SettingsTestRequest, SettingsUpdate
+from .. import db
+from ..schemas import SettingsUpdate
 
 router = APIRouter(prefix="/api", tags=["settings"])
 
 
 def _slot_view(slot: str) -> dict:
-    base = db.get_setting(f"{slot}.base_url")
-    key = db.get_setting(f"{slot}.api_key")
     return {
-        "base_url": base,
-        "api_key_masked": llm.mask_key(key),
-        "api_key_set": bool(key),
+        "base_url": db.get_setting(f"{slot}.base_url"),
         "model": db.get_setting(f"{slot}.model"),
         "timeout": float(db.get_setting(f"{slot}.timeout", "60")),
     }
@@ -49,10 +44,6 @@ def _apply_slot(slot: str, s) -> list[str]:
                 "message": f"{slot} 槽位 base_url 必须以 http:// 或 https:// 开头"})
         db.set_setting(f"{slot}.base_url", url)
         applied.append(f"{slot}.base_url")
-    # 硬规则 2：api_key 留空/None = 保持不变；只有非空才更新
-    if s.api_key:
-        db.set_setting(f"{slot}.api_key", s.api_key)
-        applied.append(f"{slot}.api_key")
     if s.model is not None:
         db.set_setting(f"{slot}.model", s.model.strip())
         applied.append(f"{slot}.model")
@@ -77,12 +68,4 @@ def update_settings(req: SettingsUpdate):
                 "message": "时区标识无效（示例：Asia/Shanghai）"})
         db.set_setting("app.timezone", req.timezone)
         applied.append("app.timezone")
-    # 密钥可能已更新：刷新日志脱敏清单（硬规则 3）
-    scrubber.refresh()
-    # 更新后回读脱敏视图（硬规则 1：任何回显不含明文）
     return {"applied": applied, "settings": get_settings()}
-
-
-@router.post("/settings/test")
-def test_settings(req: SettingsTestRequest):
-    return [llm.test_slot(s) for s in req.slots]

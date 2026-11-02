@@ -3,7 +3,7 @@
 - /api/agent/chat      ：对话页单一引擎（DSH 动作协议：reply + actions[] 写回方寸）
 - /api/agent/extract   ：纪要 / 长文提炼为结构化待办候选
 - /api/agent/summarize ：按给定事实清单生成周报 / 项目摘要
-- /api/agent/health    ：DSH + DeepSeek Key 连通性检查
+- /api/agent/health    ：DSH 连通性检查
 """
 import json
 import logging
@@ -24,7 +24,7 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     project: str | None = None  # 可附加项目筛选（前端项目联动上下文）
     note_context: str | None = None  # 前端可选附带的笔记摘要
-    workspace: dict | None = None  # 前端工作台事实（todos/meetings/expenses/notes/projects）
+    workspace: dict | None = None  # 前端工作台事实（todos/meetings/notes/projects）
 
 
 class ExtractRequest(BaseModel):
@@ -38,7 +38,7 @@ class SummarizeRequest(BaseModel):
 
 
 CHAT_SYSTEM = """你是「方寸」的 AI 助手（由 DeepSeek Harness 驱动），也是方寸工作台的数据管家。
-用户会提供工作台事实（待办/会议/记账/笔记/项目）和消息。你必须且只能输出一个 JSON 对象：
+用户会提供工作台事实（待办/会议/笔记/项目）和消息。你必须且只能输出一个 JSON 对象：
 
 {"reply": "给用户的自然语言回复", "actions": [动作列表]}
 
@@ -47,7 +47,6 @@ reply 必填（给用户的回复）；actions 可为空数组（纯回答/闲�
 可用动作 op（白名单，不得使用其他 op）：
 - add_todo    : {"op":"add_todo", "title":"待办内容", "due":"YYYY-MM-DD 或 null", "project":"项目名或 null"}
 - add_meeting : {"op":"add_meeting", "title":"会议主题", "at":"YYYY-MM-DDTHH:MM 或 null", "project":"项目名或 null"}
-- add_expense : {"op":"add_expense", "amount_cents":整数分, "category":"交通/餐饮/购物/其他等"}
 - add_note    : {"op":"add_note", "title":"笔记标题", "content":"笔记正文"}
 - set_done    : {"op":"set_done", "todo_title":"与工作台事实中一致的待办标题"}
 
@@ -61,7 +60,7 @@ reply 必填（给用户的回复）；actions 可为空数组（纯回答/闲�
 只输出 JSON，不要任何前后缀、解释或 markdown 代码块。"""
 
 
-_ALLOWED_OPS = {"add_todo", "add_meeting", "add_expense", "add_note", "set_done"}
+_ALLOWED_OPS = {"add_todo", "add_meeting", "add_note", "set_done"}
 
 
 def _fmt_workspace(ws: dict | None) -> str:
@@ -73,7 +72,6 @@ def _fmt_workspace(ws: dict | None) -> str:
     todos = ws.get("todos") or []
     meetings = ws.get("meetings") or []
     notes = ws.get("notes") or []
-    expenses = ws.get("expenses") or []
     lines.append("项目：" + ("、".join(str(p.get("name", "")) for p in projects) if projects else "（无）"))
     lines.append("待办：")
     if not todos:
@@ -93,11 +91,6 @@ def _fmt_workspace(ws: dict | None) -> str:
         lines.append("（无）")
     for n in notes:
         lines.append(f"- {n.get('title')}")
-    lines.append("记账：")
-    if not expenses:
-        lines.append("（无）")
-    for e in expenses:
-        lines.append(f"- {e.get('category')} {e.get('amount')} 元")
     return "\n".join(lines)
 
 
@@ -123,15 +116,6 @@ def _clean_actions(actions) -> list[dict]:
                 continue
             item.update(title=title[:200], at=a.get("at") or None,
                         project=(str(a.get("project") or "")[:100]) or None)
-        elif op == "add_expense":
-            try:
-                amt = int(a.get("amount_cents"))
-            except (TypeError, ValueError):
-                continue
-            if amt <= 0 or amt > 100000000:
-                continue
-            item.update(amount_cents=amt,
-                        category=str(a.get("category") or "其他")[:50])
         elif op == "add_note":
             item.update(title=(str(a.get("title") or "").strip() or "笔记")[:200],
                         content=str(a.get("content") or "")[:20000])

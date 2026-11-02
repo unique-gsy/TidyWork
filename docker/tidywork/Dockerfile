@@ -9,6 +9,12 @@ WORKDIR /app/backend
 # 系统依赖（curl 用于调试探活）
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
+# docker CLI（静态二进制，仅 CLI 无 daemon）：dsh_client 经 docker exec DSH 执行 dsh headless
+ARG DOCKER_CLI_VERSION=27.5.1
+RUN curl -fsSL https://download.docker.com/linux/static/stable/aarch64/docker-${DOCKER_CLI_VERSION}.tgz -o /tmp/docker.tgz \
+    && tar -xzf /tmp/docker.tgz -C /tmp \
+    && mv /tmp/docker/docker /usr/local/bin/docker \
+    && rm -rf /tmp/docker /tmp/docker.tgz
 
 # Python 依赖（清华 PyPI 镜像，避免 pypi.org 直连慢）
 COPY backend/requirements.txt /app/backend/requirements.txt

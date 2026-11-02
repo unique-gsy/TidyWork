@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import config, db
 from .logging_setup import scrubber, setup_logging
-from .routers import agent, dsh_proxy, images, ops, parse, query, records, reports, settings
+from .routers import agent, dsh_proxy, ops, settings
 
 APP_TITLE = "个人工作台"
 
@@ -37,13 +37,8 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.include_router(parse.router)
-    app.include_router(records.router)
-    app.include_router(reports.router)
-    app.include_router(images.router)
     app.include_router(settings.router)
     app.include_router(ops.router)
-    app.include_router(query.router)
     app.include_router(agent.router)
     app.include_router(dsh_proxy.router)
 

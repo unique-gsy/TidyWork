@@ -21,3 +21,7 @@ __pycache__/
 # 历史归档与本地产物
 _backup/
 _shots/
+
+# lark-cli / 文档中间产物
+doc-fetch-resources/
+draft_*_folder/

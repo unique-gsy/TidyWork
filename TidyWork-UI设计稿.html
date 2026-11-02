@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TidyWork · 新界面设计稿</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23B84A2E'/%3E%3Cpath d='M22 20h20v6H22zm0 10h12v6H22zm0 10h20v6H22z' fill='%23F8F7F4'/%3E%3C/svg%3E">
+<style>
+/* ===== Hallmark 印记（Floor：token 化、无 AI 默认、可复核） ===== */
+:root{
+  /* 色彩 token —— 单一强调色体系，无渐变背景、无蓝紫默认 */
+  --paper:#F8F7F4; --card:#FFFFFF; --ink:#1C1E1C; --muted:#6B6F66; --faint:#A4A79E;
+  --line:#E8E4DC; --line-soft:#F0EDE6; --accent:#B84A2E; --accent-hover:#9E3C24; --accent-soft:#F6E9E2;
+  --success:#3E7A63; --success-soft:#EAF3EE; --warn:#C08A2D; --danger:#C0392B;
+  /* 字体 —— 衬线标题 × 无衬线正文，规避 Arial/Helvetica 默认 */
+  --font-display:"Noto Serif SC","Songti SC","STSong",serif;
+  --font-body:"Manrope","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  /* 字号刻度（Tailwind scale：12/14/15/16/18/20/24/30/36） */
+  --fs-xs:12px; --fs-sm:14px; --fs-base:15px; --fs-md:16px; --fs-lg:18px; --fs-xl:20px; --fs-2xl:24px; --fs-3xl:30px; --fs-4xl:36px;
+  /* 间距 token */
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px; --sp-6:24px; --sp-7:32px; --sp-8:40px; --sp-9:48px; --sp-10:64px;
+  /* 圆角（外层 14 / 内层按 半径−间距 公式） */
+  --r-lg:14px; --r-md:10px; --r-sm:6px; --r-pill:999px;
+  /* 动效 —— 加权曲线，只动 transform/opacity */
+  --ease-out:cubic-bezier(0.22,1,0.36,1);
+  --dur-1:200ms; --dur-2:500ms;
+  --shadow:0 1px 2px rgba(28,30,28,.04),0 6px 20px rgba(28,30,28,.05);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{overflow-x:clip}
+body{font-family:var(--font-body);color:var(--ink);background:var(--paper);font-size:var(--fs-base);line-height:1.6;-webkit-font-smoothing:antialiased}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+input,textarea{font-family:inherit;color:inherit}
+svg{display:block;flex:none}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:var(--r-sm)}
+@media (prefers-reduced-motion:reduce){*{transition-duration:.01ms!important;animation-duration:.01ms!important}}
+
+/* ===== 顶栏 ===== */
+.topbar{position:sticky;top:0;z-index:20;display:flex;align-items:center;justify-content:space-between;gap:var(--sp-4);padding:var(--sp-3) var(--sp-6);background:color-mix(in srgb,var(--paper) 82%,transparent);backdrop-filter:blur(14px);border-bottom:1px solid var(--line-soft)}
+.brand{display:flex;align-items:center;gap:var(--sp-3);min-width:0}
+.brand-mark{width:34px;height:34px;border-radius:var(--r-md);background:var(--accent);display:flex;align-items:center;justify-content:center;flex:none;box-shadow:0 2px 8px rgba(184,74,46,.28)}
+.brand-name{font-family:var(--font-display);font-size:var(--fs-lg);font-weight:700;letter-spacing:3px;line-height:1.2}
+.brand-sub{font-size:var(--fs-xs);color:var(--muted);letter-spacing:2px}
+.top-right{display:flex;align-items:center;gap:var(--sp-3)}
+.state-chip{display:inline-flex;align-items:center;gap:7px;font-size:var(--fs-xs);color:var(--muted);background:var(--card);border:1px solid var(--line);border-radius:var(--r-pill);padding:6px 12px}
+.state-chip .dot{width:7px;height:7px;border-radius:50%;background:var(--success)}
+
+/* ===== 侧栏 ===== */
+.layout{display:flex;min-height:calc(100vh - 61px)}
+.side{width:210px;flex:none;padding:var(--sp-6) var(--sp-3);display:flex;flex-direction:column;gap:2px;border-right:1px solid var(--line-soft)}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:var(--r-md);font-size:var(--fs-sm);color:var(--muted);transition:background var(--dur-1) var(--ease-out),color var(--dur-1) var(--ease-out);position:relative}
+.nav-item:hover{background:var(--line-soft);color:var(--ink)}
+.nav-item.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.nav-item.active::before{content:"";position:absolute;left:-12px;width:3px;height:18px;border-radius:var(--r-pill);background:var(--accent)}
+.nav-item svg{width:17px;height:17px;stroke-width:1.8}
+.side-foot{margin-top:auto;padding:var(--sp-3) var(--sp-3) 0;border-top:1px solid var(--line-soft);display:flex;align-items:center;gap:8px;font-size:var(--fs-xs);color:var(--faint)}
+.side-foot svg{width:15px;height:15px}
+
+/* ===== 主区 ===== */
+.main{flex:1;min-width:0;padding:var(--sp-7) var(--sp-8) var(--sp-9)}
+.page{max-width:1080px;margin:0 auto;display:none}
+.page.active{display:block}
+.page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:var(--sp-6);margin-bottom:var(--sp-7)}
+.page-head h1{font-family:var(--font-display);font-size:var(--fs-3xl);font-weight:700;line-height:1.3;text-wrap:balance}
+.page-head .date{color:var(--muted);font-size:var(--fs-sm);margin-top:4px;letter-spacing:1px}
+.head-act{display:flex;gap:var(--sp-3)}
+
+/* 按钮 */
+.btn{display:inline-flex;align-items:center;gap:7px;padding:9px 16px;border-radius:var(--r-md);font-size:var(--fs-sm);font-weight:600;transition:transform var(--dur-1) var(--ease-out),background var(--dur-1) var(--ease-out)}
+.btn:active{transform:scale(.98)}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover{background:var(--accent-hover)}
+.btn-ghost{background:var(--card);border:1px solid var(--line);color:var(--ink)}
+.btn-ghost:hover{border-color:var(--accent);color:var(--accent)}
+
+/* 卡片 —— 打破「等大圆角卡片套件」：非对称、少边框、单层级 */
+.grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:var(--sp-6)}
+.card{background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow);padding:var(--sp-6)}
+.card.tight{padding:var(--sp-5)}
+.card-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--sp-4)}
+.card-title{font-size:var(--fs-md);font-weight:700;display:flex;align-items:center;gap:8px}
+.card-title .no{font-family:var(--font-display);color:var(--accent);font-size:var(--fs-xs);letter-spacing:1px}
+.more{font-size:var(--fs-xs);color:var(--muted)}
+.more:hover{color:var(--accent)}
+
+/* 待办 */
+.todo{display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-3) 0;border-bottom:1px solid var(--line-soft)}
+.todo:last-child{border-bottom:none}
+.todo-cb{width:18px;height:18px;border:1.5px solid var(--line);border-radius:5px;flex:none;transition:all var(--dur-1) var(--ease-out)}
+.todo-cb:hover{border-color:var(--accent)}
+.todo.done .todo-cb{background:var(--success);border-color:var(--success)}
+.todo.done .todo-txt{color:var(--faint);text-decoration:line-through}
+.todo-txt{flex:1;min-width:0;font-size:var(--fs-sm)}
+.todo-tag{font-size:var(--fs-xs);padding:2px 9px;border-radius:var(--r-pill);background:var(--accent-soft);color:var(--accent)}
+.todo.done .todo-tag{background:var(--success-soft);color:var(--success)}
+
+/* 看板摘要 */
+.kanban{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--sp-4)}
+.kcol{background:var(--paper);border:1px solid var(--line-soft);border-radius:var(--r-md);padding:var(--sp-3)}
+.kcol-h{font-size:var(--fs-xs);font-weight:700;color:var(--muted);margin-bottom:var(--sp-3);display:flex;align-items:center;gap:6px;letter-spacing:1px}
+.kcard{background:var(--card);border:1px solid var(--line-soft);border-radius:var(--r-sm);padding:9px 11px;margin-bottom:var(--sp-2);font-size:var(--fs-xs);box-shadow:none;transition:transform var(--dur-1) var(--ease-out),box-shadow var(--dur-1) var(--ease-out)}
+.kcard:hover{transform:translateY(-1px);box-shadow:var(--shadow)}
+.kcard b{display:block;font-size:var(--fs-sm);font-weight:600;margin-bottom:3px}
+.kcard span{color:var(--faint)}
+
+/* 笔记 */
+.note{display:flex;gap:var(--sp-3);padding:var(--sp-3) 0;border-bottom:1px solid var(--line-soft);align-items:flex-start}
+.note:last-child{border-bottom:none}
+.note svg{width:15px;height:15px;stroke:var(--accent);margin-top:3px}
+.note b{display:block;font-size:var(--fs-sm);font-weight:600;margin-bottom:2px}
+.note p{font-size:var(--fs-xs);color:var(--muted);line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.note time{font-size:11px;color:var(--faint);flex:none;margin-top:2px}
+
+/* AI 快捷卡 */
+.ai-quick{grid-column:span 12;background:var(--ink);color:var(--paper);border-radius:var(--r-lg);padding:var(--sp-7);display:flex;align-items:center;justify-content:space-between;gap:var(--sp-6);box-shadow:0 8px 32px rgba(28,30,28,.16)}
+.ai-quick h2{font-family:var(--font-display);font-size:var(--fs-xl);font-weight:700;margin-bottom:var(--sp-2);text-wrap:balance}
+.ai-quick p{color:color-mix(in srgb,var(--paper) 68%,transparent);font-size:var(--fs-sm);max-width:480px}
+.ai-quick .btn-primary{background:var(--paper);color:var(--ink)}
+.ai-quick .btn-primary:hover{background:#EDE9E0}
+.ai-mark{width:44px;height:44px;border-radius:var(--r-md);background:var(--accent);display:flex;align-items:center;justify-content:center;flex:none}
+
+/* ===== AI 助手视图 ===== */
+.chat-page{max-width:760px;margin:0 auto;padding-top:var(--sp-9)}
+.chat-center{text-align:center}
+.greeting{font-family:var(--font-display);font-size:var(--fs-4xl);font-weight:700;margin-bottom:var(--sp-3);text-wrap:balance}
+.greeting-sub{color:var(--muted);font-size:var(--fs-md);margin-bottom:var(--sp-7)}
+.samples{display:flex;gap:var(--sp-2);justify-content:center;flex-wrap:wrap;margin-bottom:var(--sp-8)}
+.sample{background:var(--card);border:1px solid var(--line);border-radius:var(--r-pill);padding:8px 16px;font-size:var(--fs-sm);color:var(--muted);transition:transform var(--dur-1) var(--ease-out),border-color var(--dur-1) var(--ease-out),color var(--dur-1) var(--ease-out)}
+.sample:hover{border-color:var(--accent);color:var(--accent);transform:translateY(-1px)}
+.composer{display:flex;align-items:center;gap:var(--sp-3);background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg);padding:10px 12px;box-shadow:var(--shadow);transition:border-color var(--dur-1) var(--ease-out),box-shadow var(--dur-1) var(--ease-out)}
+.composer:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 12%,transparent),var(--shadow)}
+.composer input{flex:1;border:none;outline:none;background:transparent;font-size:var(--fs-md);padding:8px 6px}
+.composer .send{width:38px;height:38px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;transition:background var(--dur-1) var(--ease-out),transform var(--dur-1) var(--ease-out)}
+.composer .send:hover{background:var(--accent-hover)}
+.composer .send:active{transform:scale(.94)}
+.composer .send svg{width:17px;height:17px}
+.chat-hint{color:var(--faint);font-size:var(--fs-xs);margin-top:var(--sp-4);text-align:center}
+.toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(12px);background:var(--ink);color:var(--paper);font-size:var(--fs-sm);padding:10px 18px;border-radius:var(--r-pill);box-shadow:0 8px 24px rgba(28,30,28,.2);opacity:0;pointer-events:none;transition:opacity var(--dur-2) var(--ease-out),transform var(--dur-2) var(--ease-out);z-index:50}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.msg{display:flex;gap:var(--sp-3);text-align:left;margin-bottom:var(--sp-5)}
+.msg.user{justify-content:flex-end}
+.msg .avatar{width:30px;height:30px;border-radius:var(--r-sm);background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:var(--fs-xs);font-weight:700;flex:none}
+.bubble{max-width:76%;padding:10px 14px;border-radius:var(--r-md);font-size:var(--fs-sm)}
+.msg.user .bubble{background:var(--ink);color:var(--paper);border-radius:var(--r-md) var(--r-md) 4px var(--r-md)}
+.msg.ai .bubble{background:var(--card);border:1px solid var(--line);border-radius:var(--r-md) var(--r-md) var(--r-md) 4px;box-shadow:var(--shadow)}
+
+/* ===== 规则标注（交付辅助，非产品 UI） ===== */
+.rules-panel{margin-top:var(--sp-10);background:var(--line-soft);border-radius:var(--r-lg);padding:var(--sp-6);font-size:var(--fs-xs);color:var(--muted)}
+.rules-panel summary{cursor:pointer;font-weight:700;color:var(--ink);font-size:var(--fs-sm);user-select:none}
+.rules-panel ul{list-style:none;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:6px 20px;padding-top:var(--sp-3)}
+.rules-panel li::before{content:"·";color:var(--accent);font-weight:700;margin-right:6px}
+.rules-panel code{background:var(--card);padding:1px 5px;border-radius:4px;font-size:11px}
+
+/* ===== 响应式 ===== */
+@media (max-width:860px){
+  .side{display:none}
+  .topbar{padding:var(--sp-2) var(--sp-4);flex-wrap:wrap}
+  .grid{grid-template-columns:1fr}
+  .main{padding:var(--sp-5) var(--sp-4) var(--sp-8)}
+  .ai-quick{grid-column:span 1;flex-direction:column;align-items:flex-start}
+  .main{padding:var(--sp-5) var(--sp-4) var(--sp-8)}
+  .page-head{flex-direction:column;align-items:flex-start}
+  .kanban{grid-template-columns:1fr}
+  .greeting{font-size:var(--fs-3xl)}
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 64 64" width="20" height="20"><path d="M20 16h24v7H20zm0 12h14v7H20zm0 12h24v7H20z" fill="#F8F7F4"/></svg>
+    </div>
+    <div>
+      <div class="brand-name">方寸</div>
+      <div class="brand-sub">日知其所亡</div>
+    </div>
+  </div>
+  <div class="top-right">
+    <span class="state-chip"><span class="dot"></span>DSH 已连接</span>
+  </div>
+</header>
+
+<div class="layout">
+  <nav class="side" aria-label="主导航">
+    <button class="nav-item active" data-view="work">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><path d="M9 22V12h6v10"/></svg>
+      工作台
+    </button>
+    <button class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 9h18M9 21V9"/></svg>
+      看板
+    </button>
+    <button class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+      笔记
+    </button>
+    <button class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="4" width="18" height="18" rx="3"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+      日程
+    </button>
+    <button class="nav-item" data-view="ai">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+      AI 助手
+    </button>
+    <button class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      设置
+    </button>
+    <div class="side-foot">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+      数据目录 · 宿主机
+    </div>
+  </nav>
+
+  <main class="main">
+    <!-- 工作台视图 -->
+    <section class="page active" id="work" aria-label="工作台">
+      <div class="page-head">
+        <div>
+          <h1>十一月一日 · 星期天</h1>
+          <div class="date">把今天整理清楚，剩下的交给时间。</div>
+        </div>
+        <div class="head-act">
+          <button class="btn btn-ghost">本周回顾</button>
+          <button class="btn btn-primary">新建待办</button>
+        </div>
+      </div>
+      <div class="grid">
+        <div class="card tight" style="grid-column:span 7">
+          <div class="card-head">
+            <div class="card-title"><span class="no">壹</span>今日待办</div>
+            <span class="more">3 项 · 2 完成</span>
+          </div>
+          <div class="todo done"><span class="todo-cb"></span><span class="todo-txt">整理 Q3 工作台数据迁移清单</span><span class="todo-tag">收尾</span></div>
+          <div class="todo done"><span class="todo-cb"></span><span class="todo-txt">同步 TidyWork 双容器部署说明</span><span class="todo-tag">部署</span></div>
+          <div class="todo"><span class="todo-cb"></span><span class="todo-txt">写本周例会汇报提纲</span><span class="todo-tag">会议</span></div>
+          <div class="todo"><span class="todo-cb"></span><span class="todo-txt">回复 DSH 集成评审意见</span><span class="todo-tag">协作</span></div>
+        </div>
+        <div class="card tight" style="grid-column:span 5">
+          <div class="card-head">
+            <div class="card-title"><span class="no">贰</span>本周看板</div>
+            <span class="more">进行中 2</span>
+          </div>
+          <div class="kanban">
+            <div class="kcol">
+              <div class="kcol-h">待开始</div>
+              <div class="kcard"><b>容器镜像瘦身</b><span>优化 base 镜像</span></div>
+              <div class="kcard"><b>设置页加密</b><span>Key 本地存储</span></div>
+            </div>
+            <div class="kcol">
+              <div class="kcol-h">进行中</div>
+              <div class="kcard"><b>前端重设计</b><span>hallmark 规则落地</span></div>
+            </div>
+            <div class="kcol">
+              <div class="kcol-h">已完成</div>
+              <div class="kcard"><b>双容器部署</b><span>compose 一键</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="card tight" style="grid-column:span 5">
+          <div class="card-head">
+            <div class="card-title"><span class="no">叁</span>最近笔记</div>
+            <span class="more">查看全部</span>
+          </div>
+          <div class="note">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z"/></svg>
+            <div><b>容器化部署的取舍记录</b><p>数据卷挂载、Key 隔离、DSH token 流转的三层设计……</p></div>
+            <time>11-01</time>
+          </div>
+          <div class="note">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z"/></svg>
+            <div><b>方寸改名 TidyWork 备忘</b><p>用户口径统一，后续全部以 TidyWork 命名……</p></div>
+            <time>10-31</time>
+          </div>
+          <div class="note">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z"/></svg>
+            <div><b>DSH 信任栅栏修复</b><p>--trusted-host 与 Host 校验的容器适配……</p></div>
+            <time>10-31</time>
+          </div>
+        </div>
+        <div class="card tight" style="grid-column:span 7">
+          <div class="card-head">
+            <div class="card-title"><span class="no">肆</span>今日时间线</div>
+            <span class="more">4 段安排</span>
+          </div>
+          <div class="note">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+            <div><b>10:00 · 例会</b><p>本周 TidyWork 进度同步与风险</p></div>
+            <time>上午</time>
+          </div>
+          <div class="note">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+            <div><b>14:30 · 深度工作</b><p>前端重设计稿评审</p></div>
+            <time>下午</time>
+          </div>
+        </div>
+        <div class="ai-quick">
+          <div style="display:flex;gap:var(--sp-5);align-items:center;min-width:0">
+            <div class="ai-mark">
+              <svg viewBox="0 0 64 64" width="22" height="22"><path d="M20 16h24v7H20zm0 12h14v7H20zm0 12h24v7H20z" fill="#F8F7F4"/></svg>
+            </div>
+            <div>
+              <h2>让 AI 助手把今天的尾巴收干净</h2>
+              <p>待办转看板、会议生成纪要、笔记自动归类——DSH 已连接，本地数据不会离开这台机器。</p>
+            </div>
+          </div>
+          <button class="btn btn-primary" data-view="ai">开始对话</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- AI 助手视图 -->
+    <section class="page" id="ai" aria-label="AI 助手">
+      <div class="chat-page">
+        <div class="chat-center">
+          <h1 class="greeting">今天想整理哪一块？</h1>
+          <p class="greeting-sub">所有 AI 交互都由 DSH 完成，数据不出这台机器。</p>
+          <div class="samples">
+            <button class="sample">把待办转成看板卡片</button>
+            <button class="sample">总结本周工作纪要</button>
+            <button class="sample">规划明天的日程</button>
+          </div>
+          <div class="composer">
+            <input type="text" placeholder="输入指令，例如：把「容器部署」笔记加入看板…" aria-label="输入指令">
+            <button class="send" aria-label="发送">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/></svg>
+            </button>
+          </div>
+          <div class="chat-hint">按 Enter 发送 · Shift+Enter 换行</div>
+        </div>
+        <div style="margin-top:var(--sp-9)">
+          <div class="msg user"><div class="bubble">把「容器化部署的取舍记录」笔记整理成看板卡片</div></div>
+          <div class="msg ai">
+            <div class="avatar">方</div>
+            <div class="bubble">已生成 3 张卡片，放入「进行中」列：<br>· 数据卷挂载设计<br>· Key 隔离方案<br>· DSH token 流转<br>需要我调整分类或补充内容吗？</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <details class="rules-panel">
+      <summary>本次设计应用的规则清单（确认后可移除）</summary>
+      <ul>
+        <li>色彩/字体全部经 <code>:root</code> token 声明（Hallmark Floor 1）</li>
+        <li>无蓝紫渐变 logo，改用单色朱砂印章（Floor 11）</li>
+        <li>无 emoji 图标，全部内联 SVG 线性图标（Floor 11）</li>
+        <li>正文 <code>text-wrap:balance</code>，无孤行、无中缀点元信息（Floor 10）</li>
+        <li><code>overflow-x:clip</code> + 容器封顶居中（Floor 4、14）</li>
+        <li>全元素 <code>:focus-visible</code> + <code>prefers-reduced-motion</code> 降级（Floor 6、7）</li>
+        <li>动效仅 transform/opacity，加权曲线 <code>cubic-bezier(0.22,1,0.36,1)</code>（landing B7）</li>
+        <li>字号落 Tailwind 刻度、间距 token 化、圆角按嵌套公式（landing B1/B2/B3）</li>
+        <li>字体：衬线标题 × Manrope 正文，规避 Arial/Helvetica 默认（landing B1）</li>
+        <li>导航悬浮胶囊 + 背景模糊，移动端全高面板（landing B7）</li>
+      </ul>
+    </details>
+  </main>
+</div>
+
+<script>
+(function(){
+  var btns=document.querySelectorAll('[data-view]');
+  function go(v){
+    document.querySelectorAll('.page').forEach(function(p){p.classList.toggle('active',p.id===v)});
+    document.querySelectorAll('.nav-item').forEach(function(n){n.classList.toggle('active',n.dataset.view===v)});
+    document.querySelector('.main').scrollTop=0;
+  }
+  btns.forEach(function(b){b.addEventListener('click',function(){go(b.dataset.view)})});
+  var toast=document.createElement('div');
+  toast.className='toast';
+  document.body.appendChild(toast);
+  var timer=null;
+  function showToast(msg){
+    toast.textContent=msg;
+    toast.classList.add('show');
+    clearTimeout(timer);
+    timer=setTimeout(function(){toast.classList.remove('show')},1800);
+  }
+  document.querySelectorAll('button:not([data-view])').forEach(function(b){
+    b.addEventListener('click',function(){showToast('演示中：此操作将在整体实施时接入')});
+  });
+})();
+</script>
+</body>
+</html>
