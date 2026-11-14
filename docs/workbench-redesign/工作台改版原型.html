@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TidyWork 工作台 · 改版原型 v3.8</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233370ff'/%3E%3Ctext x='16' y='22' font-size='16' font-family='sans-serif' font-weight='700' fill='%23fff' text-anchor='middle'%3ET%3C/text%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#f7f8fa; --card:#fff; --line:#e8eaef; --line-soft:#f0f2f5;
+  --ink:#1f2329; --ink2:#646a73; --ink3:#8f959e;
+  --brand:#3370ff; --brand-soft:#eef2ff; --brand-ink:#245bdb;
+  --danger:#e5484d; --danger-soft:#fdeeee;
+  --warn:#ff8800; --ok:#2ea121;
+  --r:12px; --r-s:8px;
+  --font:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg); color:var(--ink); font-family:var(--font);
+  font-size:14px; line-height:1.55; -webkit-font-smoothing:antialiased;
+}
+button{font-family:inherit;font-size:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input{font-family:inherit;font-size:16px}
+
+/* ---------- 顶栏（沿用现有） ---------- */
+.topbar{
+  height:60px;display:flex;align-items:center;justify-content:space-between;
+  padding:0 28px;background:var(--card);border-bottom:1px solid var(--line);
+  position:sticky;top:0;z-index:20;
+}
+.brand{display:flex;align-items:center;gap:10px}
+.logo{
+  width:26px;height:26px;border-radius:7px;background:var(--brand);
+  color:#fff;font-weight:700;font-size:14px;display:grid;place-items:center;
+}
+.brand b{font-size:15px;letter-spacing:.2px}
+.crumb{color:var(--ink3);font-size:13px;padding-left:2px}
+.top-actions{display:flex;align-items:center;gap:14px}
+.hint{color:var(--ink3);font-size:13px}
+.btn{
+  border-radius:var(--r-s);padding:8px 16px;font-size:13px;font-weight:500;
+  transition:background .15s,border-color .15s,color .15s;
+  min-height:34px;
+}
+.btn.primary{background:var(--brand);color:#fff}
+.btn.primary:hover{background:#2b60e0}
+.btn.ghost{border:1px solid var(--line);color:var(--ink2);background:var(--card)}
+.btn.ghost:hover{border-color:#c9cfd8;color:var(--ink)}
+
+/* ---------- 主体 ---------- */
+.wrap{max-width:1180px;margin:0 auto;padding:26px 28px 40px}
+.headline{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:20px;flex-wrap:wrap}
+.h-date{font-size:26px;font-weight:600;letter-spacing:-.3px;display:flex;align-items:baseline;gap:8px}
+.h-date .wk{font-size:14px;font-weight:400;color:var(--ink3)}
+.h-sub{margin-top:6px;color:var(--ink2);font-size:13.5px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.h-sub .warn-tag{
+  color:var(--danger);background:var(--danger-soft);border-radius:6px;
+  padding:2px 8px;font-size:12px;font-weight:500;
+}
+.h-actions{display:flex;gap:8px}
+
+.grid{display:grid;grid-template-columns:1fr 328px;gap:16px;align-items:start}
+.col{display:flex;flex-direction:column;gap:16px;min-width:0}
+
+.card{
+  background:var(--card);border:1px solid var(--line);border-radius:var(--r);
+  padding:16px 18px 18px;
+}
+.card-head{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.card-head h2{font-size:15px;font-weight:600}
+.card-head .meta{font-size:12px;color:var(--ink3);margin-left:auto}
+.card-head .link{
+  font-size:12.5px;color:var(--brand);padding:2px 4px;border-radius:4px;
+}
+.card-head .link:hover{background:var(--brand-soft)}
+
+/* ---------- ① 今日日程时间轴 ---------- */
+.tl{display:grid;grid-template-columns:44px 1fr;gap:0}
+.tl-hours{position:relative}
+.tl-content{position:relative;border-left:1px solid var(--line-soft)}
+.hour{font-size:11.5px;color:var(--ink3);font-variant-numeric:tabular-nums}
+.hl{position:absolute;left:-1px;right:0;border-top:1px dashed var(--line-soft);pointer-events:none}
+
+.ev{
+  position:absolute;left:8px;right:10px;border-radius:var(--r-s);
+  background:var(--brand-soft);border:1px solid #d6e0ff;
+  padding:8px 10px;cursor:pointer;text-align:left;width:calc(100% - 18px);
+  transition:box-shadow .15s,transform .15s,background .15s;
+}
+.ev:hover{box-shadow:0 2px 10px rgba(51,112,255,.14);transform:translateY(-1px)}
+.ev .ev-t{font-size:13px;font-weight:600;color:var(--brand-ink)}
+.ev .ev-m{font-size:11.5px;color:var(--ink2);margin-top:2px;display:flex;gap:8px;flex-wrap:wrap}
+.ev[aria-expanded="true"]{background:#e3ebff;border-color:#b9cdff;z-index:3}
+.ev-detail{font-size:11.5px;color:var(--ink2);margin-top:6px;padding-top:6px;border-top:1px dashed #b9cdff;display:none}
+.ev[aria-expanded="true"] .ev-detail{display:block}
+
+.gap{
+  position:absolute;left:8px;right:10px;border-radius:var(--r-s);
+  background:#fafbfc;border:1px dashed var(--line);color:var(--ink3);
+  font-size:11.5px;display:flex;align-items:center;justify-content:center;gap:6px;
+}
+.gap svg{opacity:.5}
+
+/* ---------- ② 待办 ---------- */
+.tabs{display:flex;gap:4px;margin-left:auto;background:#f4f5f7;border-radius:7px;padding:2px}
+.tab{
+  font-size:12px;color:var(--ink2);padding:4px 9px;border-radius:5px;white-space:nowrap;
+  transition:background .15s,color .15s;min-height:26px;
+}
+.tab:hover{color:var(--ink)}
+.tab.on{background:var(--card);color:var(--ink);font-weight:500;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.tab .n{color:var(--ink3);font-variant-numeric:tabular-nums;margin-left:2px}
+.tab.on .n{color:var(--ink3)}
+
+.todo-list{list-style:none;display:flex;flex-direction:column}
+.todo{
+  display:flex;align-items:flex-start;gap:10px;padding:9px 4px 9px 2px;
+  border-bottom:1px solid var(--line-soft);
+}
+.todo:last-child{border-bottom:0}
+.todo:hover .row-actions{opacity:1}
+.chk{
+  width:18px;height:18px;border:1.5px solid #c4cad4;border-radius:5px;flex:0 0 auto;
+  margin-top:2px;display:grid;place-items:center;transition:border-color .15s,background .15s;
+}
+.chk:hover{border-color:var(--brand)}
+.chk svg{opacity:0;transform:scale(.7);transition:opacity .15s,transform .15s}
+.todo.done .chk{background:var(--brand);border-color:var(--brand)}
+.todo.done .chk svg{opacity:1;transform:scale(1)}
+.t-main{flex:1;min-width:0}
+.t-title{font-size:13.5px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.todo.done .t-title{color:var(--ink3);text-decoration:line-through;text-decoration-color:#c9cfd8}
+.dot{width:6px;height:6px;border-radius:50%;flex:0 0 auto}
+.dot.high{background:var(--danger)} .dot.mid{background:var(--warn)} .dot.low{background:#c4cad4}
+.t-meta{font-size:11.5px;color:var(--ink3);display:flex;gap:8px;margin-top:2px;flex-wrap:wrap}
+.t-meta .over{color:var(--danger);font-weight:500}
+.row-actions{opacity:0;transition:opacity .15s;align-self:center}
+.row-actions button{font-size:11.5px;color:var(--ink3);padding:3px 6px;border-radius:5px}
+.row-actions button:hover{background:#f4f5f7;color:var(--ink2)}
+
+.add-row{display:flex;align-items:center;gap:8px;margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)}
+.add-row .plus{width:18px;height:18px;display:grid;place-items:center;color:var(--brand)}
+.add-row input{
+  border:0;outline:0;flex:1;font-size:13.5px;background:transparent;color:var(--ink);
+  padding:6px 0;min-height:32px;
+}
+.add-row input::placeholder{color:#b6bcc6}
+.add-row .go{font-size:12px;color:var(--brand);padding:4px 8px;border-radius:5px}
+.add-row .go:hover{background:var(--brand-soft)}
+.empty{color:var(--ink3);font-size:13px;padding:16px 2px}
+
+/* ---------- ④ 本周进度 ---------- */
+.prog{display:flex;align-items:center;gap:16px}
+.ring{position:relative;width:104px;height:104px;flex:0 0 auto}
+.ring svg{display:block}
+.ring .pct{
+  position:absolute;inset:0;display:grid;place-items:center;
+  font-size:24px;font-weight:600;letter-spacing:-.5px;
+}
+.ring .pct small{font-size:12px;font-weight:400;color:var(--ink3);margin-left:1px}
+.stats{flex:1;min-width:0;display:flex;flex-direction:column;gap:7px}
+.stat{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-size:12.5px}
+.stat .k{color:var(--ink2)}
+.stat .v{font-weight:600;font-variant-numeric:tabular-nums}
+.stat .v.bad{color:var(--danger)}
+.prog-foot{margin-top:12px;padding-top:10px;border-top:1px solid var(--line-soft);font-size:11.5px;color:var(--ink3)}
+
+/* ---------- ⑤ 最近笔记 ---------- */
+.note-list{display:flex;flex-direction:column;gap:2px}
+.note{
+  display:block;width:100%;text-align:left;padding:8px 8px;border-radius:var(--r-s);
+  transition:background .15s;
+}
+.note:hover{background:#f8f9fb}
+.note .nt{font-size:13px;font-weight:500;display:flex;align-items:center;gap:6px}
+.note .nt .go{font-size:11px;color:var(--brand);opacity:0;transition:opacity .15s}
+.note:hover .nt .go{opacity:1}
+.note .np{font-size:11.5px;color:var(--ink3);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.note .ntime{font-size:11px;color:#b0b6c0;margin-left:auto;font-variant-numeric:tabular-nums}
+
+/* ---------- ⑥ 快捷操作 ---------- */
+.quick{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.q{
+  display:flex;align-items:center;gap:8px;padding:10px 10px;border:1px solid var(--line);
+  border-radius:var(--r-s);font-size:12.5px;color:var(--ink2);text-align:left;
+  transition:border-color .15s,background .15s,color .15s;min-height:44px;
+}
+.q:hover{border-color:#cfd6e2;background:#fafbfd;color:var(--ink)}
+.q svg{color:var(--brand);flex:0 0 auto}
+
+/* ---------- ③ 本周节奏 ---------- */
+.week{display:grid;grid-template-columns:repeat(7,1fr);gap:8px}
+.day{
+  border:1px solid var(--line-soft);border-radius:var(--r-s);padding:8px 6px 9px;
+  text-align:center;position:relative;transition:border-color .15s,background .15s;
+  min-height:104px;
+}
+.day:hover{border-color:#d3d9e3;background:#fbfcfe}
+.day.today{background:var(--brand-soft);border-color:#cddcff}
+.day .dwk{font-size:11px;color:var(--ink3)}
+.day .dd{font-size:16px;font-weight:600;margin:1px 0 6px;font-variant-numeric:tabular-nums}
+.day.today .dd,.day.today .dwk{color:var(--brand-ink)}
+.dots{display:flex;justify-content:center;gap:3px;flex-wrap:wrap;min-height:12px}
+.td{width:7px;height:7px;border-radius:2px;background:#fff;border:1px solid #c4cad4}
+.td.on{background:var(--brand);border-color:var(--brand)}
+.td.late{background:var(--danger);border-color:var(--danger)}
+.dmt{font-size:10.5px;color:var(--ink3);margin-top:6px;min-height:14px}
+.dmt b{color:var(--ink2);font-weight:500}
+.day.today .dmt b{color:var(--brand-ink)}
+.tip{
+  position:absolute;left:50%;bottom:calc(100% + 6px);transform:translateX(-50%);
+  background:#1f2329;color:#fff;font-size:11.5px;padding:5px 9px;border-radius:6px;
+  white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .15s;z-index:10;
+}
+.day:hover .tip{opacity:1}
+
+/* ---------- 笔记预览浮层 ---------- */
+.mask{
+  position:fixed;inset:0;background:rgba(20,24,31,.28);display:none;
+  z-index:40;
+}
+.mask.on{display:block}
+.preview{
+  position:fixed;right:24px;bottom:24px;width:min(360px,calc(100vw - 32px));
+  background:var(--card);border:1px solid var(--line);border-radius:var(--r);
+  box-shadow:0 16px 40px rgba(20,24,31,.16);padding:16px 18px;z-index:41;
+  display:none;
+}
+.preview.on{display:block}
+.preview h3{font-size:15px;margin-bottom:4px;padding-right:24px}
+.preview .pm{font-size:11.5px;color:var(--ink3)}
+.preview .pc{font-size:12.5px;color:var(--ink2);margin-top:10px;line-height:1.65}
+.preview .pfoot{margin-top:14px;display:flex;justify-content:flex-end;gap:8px}
+.preview .x{position:absolute;top:10px;right:10px;width:26px;height:26px;border-radius:6px;color:var(--ink3);display:grid;place-items:center}
+.preview .x:hover{background:#f4f5f7}
+
+/* ---------- toast ---------- */
+.toast{
+  position:fixed;left:50%;bottom:28px;transform:translate(-50%,8px);
+  background:#1f2329;color:#fff;font-size:13px;padding:9px 16px;border-radius:8px;
+  opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:60;max-width:80vw;
+}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+
+/* ---------- 响应式 ---------- */
+@media (max-width:780px){
+  .wrap{padding:20px 16px 32px}
+  .grid{grid-template-columns:1fr}
+  .h-date{font-size:22px}
+  .topbar{padding:0 16px;height:54px}
+  .hint{display:none}
+  .week{grid-template-columns:repeat(4,1fr)}
+  .week .day:nth-child(n+5){min-height:96px}
+  .quick{grid-template-columns:1fr 1fr}
+  .prog{flex-direction:row}
+  .preview{right:12px;left:12px;bottom:12px;width:auto}
+}
+@media (max-width:420px){
+  .week{grid-template-columns:repeat(3,1fr)}
+  .tabs{flex-wrap:wrap}
+}
+:focus-visible{outline:2px solid #86a8ff;outline-offset:2px;border-radius:6px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">T</span><b>TidyWork</b><span class="crumb">工作台</span>
+  </div>
+  <div class="top-actions">
+    <span class="hint">对话使用 DSH 原生界面</span>
+    <button class="btn primary" id="btnChat">+ 开始对话</button>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="headline">
+    <div>
+      <div class="h-date">11月8日 <span class="wk">周日</span></div>
+      <div class="h-sub" id="summary"></div>
+    </div>
+    <div class="h-actions">
+      <button class="btn ghost" id="btnNewTodo">+ 新建待办</button>
+      <button class="btn ghost" id="btnNewMeeting">新建会议</button>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="col">
+
+      <!-- ① 今日日程 -->
+      <section class="card">
+        <div class="card-head">
+          <h2>今日日程</h2>
+          <span class="meta">09:00 – 18:00</span>
+          <button class="link" data-goto="meetings">全部会议 →</button>
+        </div>
+        <div class="tl">
+          <div class="tl-hours" id="tlHours"></div>
+          <div class="tl-content" id="tlContent"></div>
+        </div>
+      </section>
+
+      <!-- ② 待办 -->
+      <section class="card">
+        <div class="card-head">
+          <h2>待办</h2>
+          <div class="tabs" id="tabs"></div>
+        </div>
+        <ul class="todo-list" id="todoList"></ul>
+        <div class="add-row">
+          <span class="plus">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2v10M2 7h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </span>
+          <input id="newTodoInput" placeholder="添加一条待办，回车确认" aria-label="添加待办">
+          <button class="go" id="btnAddTodo">添加</button>
+        </div>
+      </section>
+
+    </div>
+
+    <div class="col">
+
+      <!-- ④ 本周进度 -->
+      <section class="card">
+        <div class="card-head"><h2>本周进度</h2><span class="meta" id="weekRange"></span></div>
+        <div class="prog">
+          <div class="ring">
+            <svg width="104" height="104" viewBox="0 0 104 104" aria-hidden="true">
+              <circle cx="52" cy="52" r="44" fill="none" stroke="#eef0f4" stroke-width="10"/>
+              <circle id="ringArc" cx="52" cy="52" r="44" fill="none" stroke="#3370ff" stroke-width="10"
+                stroke-linecap="round" stroke-dasharray="276.5" stroke-dashoffset="276.5"
+                transform="rotate(-90 52 52)" style="transition:stroke-dashoffset .5s ease"/>
+            </svg>
+            <div class="pct"><span id="pctNum">0</span><small>%</small></div>
+          </div>
+          <div class="stats">
+            <div class="stat"><span class="k">已完成 / 全部</span><span class="v" id="statDone">—</span></div>
+            <div class="stat"><span class="k">今天待办</span><span class="v" id="statToday">—</span></div>
+            <div class="stat"><span class="k">逾期未完成</span><span class="v bad" id="statLate">—</span></div>
+            <div class="stat"><span class="k">本周会议</span><span class="v" id="statMeet">—</span></div>
+          </div>
+        </div>
+        <div class="prog-foot" id="progFoot"></div>
+      </section>
+
+      <!-- ⑤ 最近笔记 -->
+      <section class="card">
+        <div class="card-head">
+          <h2>最近笔记</h2>
+          <button class="link" data-goto="notes">全部笔记 →</button>
+        </div>
+        <div class="note-list" id="noteList"></div>
+      </section>
+
+      <!-- ⑥ 快捷操作 -->
+      <section class="card">
+        <div class="card-head"><h2>快捷操作</h2></div>
+        <div class="quick" id="quickGrid"></div>
+      </section>
+
+    </div>
+  </div>
+
+  <!-- ③ 本周节奏 -->
+  <section class="card" style="margin-top:16px">
+    <div class="card-head"><h2>本周节奏</h2><span class="meta">11月2日 – 11月8日 · 今天高亮</span></div>
+    <div class="week" id="weekGrid"></div>
+  </section>
+
+</div>
+
+<div class="mask" id="mask"></div>
+<div class="preview" id="preview" role="dialog" aria-modal="true" aria-labelledby="pvTitle">
+  <button class="x" id="pvClose" aria-label="关闭">
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+  </button>
+  <h3 id="pvTitle"></h3>
+  <div class="pm" id="pvMeta"></div>
+  <div class="pc" id="pvBody"></div>
+  <div class="pfoot">
+    <button class="btn ghost" id="pvCancel">关闭</button>
+    <button class="btn primary" id="pvOpen">打开笔记 →</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ================= 数据（源自 data/dsh/profiles/web/tidywork/*.json） ================= */
+const TODAY = "2026-11-08";
+const TODOS = [
+  {id:"tdfc1ef92", title:"完成 DSH 前端原型设计", priority:"high", category:"工作", due:"today", done:true},
+  {id:"te2c47147", title:"周五前完成周报",       priority:"high", category:"工作", due:"2026-11-06", done:false},
+  {id:"tacd1ca89", title:"专家评委开会（下午2点）", priority:"high", category:"工作", due:"tomorrow", done:false},
+  {id:"tb6bf61c6", title:"提交季度总结",         priority:"high", category:"工作", due:"tomorrow", done:false},
+  {id:"t2", title:"梳理 TidyWork 数据模型",      priority:"mid",  category:"工作", due:"tomorrow", done:true},
+  {id:"t3", title:"准备容器化部署方案",          priority:"mid",  category:"DevOps", due:"2026-11-05", done:true},
+  {id:"t4", title:"阅读 DSH 插件开发文档",        priority:"low",  category:"调研", due:"yesterday", done:true}
+];
+const MEETINGS = [
+  {id:"m88d66c18", date:"2026-11-08", time:"14:00", title:"产品评审会", duration:"14:00 - 15:00", location:"会议室A", participants:3},
+  {id:"m1", date:"2026-11-03", time:"09:00", title:"晨会 · 每日同步", duration:"09:00 - 09:30", location:"线上会议", participants:5},
+  {id:"m2", date:"2026-11-03", time:"10:00", title:"产品规划会", duration:"10:00 - 11:30", location:"3F 会议室 A", participants:8},
+  {id:"m3", date:"2026-11-03", time:"14:00", title:"设计评审", duration:"14:00 - 15:00", location:"线上会议", participants:6},
+  {id:"m4", date:"2026-11-03", time:"16:30", title:"1:1 · 产品对齐", duration:"16:30 - 17:00", location:"线上会议", participants:2},
+  {id:"m5", date:"2026-11-04", time:"14:00", title:"技术评审", duration:"14:00 - 15:30", location:"2F 会议室 B", participants:7},
+  {id:"m6", date:"2026-11-09", time:"09:30", title:"团队周会", duration:"09:30 - 10:30", location:"大会议室", participants:12},
+  {id:"m7", date:"2026-11-12", time:"10:00", title:"产品内测启动", duration:"10:00 - 11:00", location:"线上会议", participants:10},
+  {id:"m22930eaa", date:"2026-11-06", time:"15:00", title:"季度复盘会", duration:"15:00 - 16:00", location:"线上会议", participants:1}
+];
+const NOTES = [
+  {title:"DSH 架构调研笔记", preview:"基于 Cordis 的插件化架构...", time:"今天 11:30",
+   body:"DeepSeek Harness 基于 Cordis 框架，采用“一切皆插件”的设计理念。前端 UI 全部以 ui-* 插件包形式存在，通过 Slot 系统挂载到主界面。"},
+  {title:"TidyWork 产品需求", preview:"核心功能模块：待办、日程...", time:"昨天 18:00",
+   body:"核心功能模块：待办、日程、笔记，数据全部本地持久化。"},
+  {title:"Docker 部署备忘", preview:"volume 挂载路径规划...", time:"11月1日 09:00",
+   body:"volume 挂载路径规划：data/dsh ↔ /root/.dsh、data/context ↔ /data。"},
+  {title:"前端设计参考", preview:"深色主题配色方案...", time:"10月30日 15:20",
+   body:"深色主题配色方案：主背景 #1c1c1e、面板 #2c2c2e、强调色 #3370ff。"}
+];
+
+/* ================= 日期工具 ================= */
+const D = s => { const [y,m,d] = s.split("-").map(Number); return new Date(y, m-1, d); };
+const addDays = (s,n) => { const dt = D(s); dt.setDate(dt.getDate()+n); return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`; };
+const diffDays = (a,b) => Math.round((D(a)-D(b))/86400000);
+const WEEK = ["周日","周一","周二","周三","周四","周五","周六"];
+const weekStartOf = s => { const dt = D(s); const d = dt.getDay()===0?6:dt.getDay()-1; return addDays(s, -d); }; // 周一为一周起点
+
+/* 把 due 归一成具体日期 */
+function dueDate(t){
+  if (t.due === "today") return TODAY;
+  if (t.due === "tomorrow") return addDays(TODAY,1);
+  if (t.due === "yesterday") return addDays(TODAY,-1);
+  return t.due;
+}
+const isLate = t => !t.done && diffDays(TODAY, dueDate(t)) > 0;
+
+/* ================= 组件 ================= */
+const ICON = {
+  check:'<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M1.6 5.2l2.2 2.2 4.6-4.8" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  plus:'<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2.5v9M2.5 7h9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+  cal:'<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="2" y="3.2" width="12" height="10.8" rx="2" stroke="currentColor" stroke-width="1.4"/><path d="M2 6.6h12M5.4 2v2.4M10.6 2v2.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+  list:'<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M5.6 4h8M5.6 8h8M5.6 12h8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M2.4 4h.01M2.4 8h.01M2.4 12h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  note:'<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="2.6" y="2.2" width="10.8" height="11.6" rx="2" stroke="currentColor" stroke-width="1.4"/><path d="M5.2 5.6h5.6M5.2 8.4h5.6M5.2 11h3.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
+  chat:'<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2.4 4.2a2 2 0 012-2h7.2a2 2 0 012 2v4.4a2 2 0 01-2 2H7l-3.4 2.6v-2.6H4.4a2 2 0 01-2-2z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+  focus:'<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="4.2" stroke="currentColor" stroke-width="1.3"/><circle cx="6" cy="6" r="1.2" fill="currentColor"/></svg>'
+};
+
+let tab = "recent";
+
+function countBy(kind){
+  const start = weekStartOf(TODAY), end = addDays(start, 6);
+  return TODOS.filter(t => {
+    if (kind === "today") return dueDate(t) === TODAY;
+    if (kind === "late") return isLate(t);
+    if (kind === "week") { const d = dueDate(t); return d >= start && d <= end; }
+    if (kind === "recent") return !t.done || dueDate(t) === TODAY;
+    return true;
+  }).length;
+}
+
+function dueLabel(t){
+  const d = dueDate(t), delta = diffDays(TODAY, d);
+  if (delta > 0 && !t.done) return `<span class="over">逾期 ${delta} 天</span>`;
+  if (delta === 0) return "今天到期";
+  if (delta === 1) return "明天";
+  if (delta === -1) return "昨天";
+  const dt = D(d);
+  return `${dt.getMonth()+1}月${dt.getDate()}日`;
+}
+
+function renderSummary(){
+  const todayMeets = MEETINGS.filter(m => m.date === TODAY).length;
+  const open = TODOS.filter(t => !t.done).length;
+  const late = TODOS.filter(isLate).length;
+  let s = `今天 ${todayMeets} 场会议 · ${open} 项待办未完成`;
+  if (late) s += ` <span class="warn-tag">${late} 项逾期</span>`;
+  document.getElementById("summary").innerHTML = s;
+}
+
+function renderTabs(){
+  const items = [["recent","近期"],["today","今天"],["late","逾期"],["week","本周"],["all","全部"]];
+  document.getElementById("tabs").innerHTML = items.map(([k,label]) => {
+    const n = countBy(k);
+    return `<button class="tab ${k===tab?"on":""}" data-tab="${k}">${label}<span class="n">${n}</span></button>`;
+  }).join("");
+  document.querySelectorAll("[data-tab]").forEach(b => {
+    b.addEventListener("click", () => { tab = b.dataset.tab; renderTabs(); renderTodos(); });
+  });
+}
+
+function sortTodos(list){
+  return list.slice().sort((a,b) => {
+    if (a.done !== b.done) return a.done ? 1 : -1;
+    return D(dueDate(a)) - D(dueDate(b));
+  });
+}
+
+function renderTodos(){
+  const start = weekStartOf(TODAY), end = addDays(start, 6);
+  let list = TODOS.filter(t => {
+    if (tab === "today") return dueDate(t) === TODAY;
+    if (tab === "late") return isLate(t);
+    if (tab === "week") { const d = dueDate(t); return d >= start && d <= end; }
+    if (tab === "recent") return !t.done || dueDate(t) === TODAY;
+    return true;
+  });
+  list = sortTodos(list);
+  const $ul = document.getElementById("todoList");
+  if (!list.length){
+    $ul.innerHTML = `<li class="empty">这个视图里还没有待办。</li>`;
+    return;
+  }
+  $ul.innerHTML = list.map(t => `
+    <li class="todo ${t.done?"done":""}" data-id="${t.id}">
+      <button class="chk" data-check="${t.id}" aria-label="${t.done?"标记为未完成":"标记为完成"}：${t.title}">${ICON.check}</button>
+      <div class="t-main">
+        <div class="t-title"><span class="dot ${t.priority}"></span>${t.title}</div>
+        <div class="t-meta"><span>${t.category}</span><span>${dueLabel(t)}</span></div>
+      </div>
+      <div class="row-actions">
+        <button data-edit="${t.id}">编辑</button>
+      </div>
+    </li>`).join("");
+
+  $ul.querySelectorAll("[data-check]").forEach(b => {
+    b.addEventListener("click", () => toggleTodo(b.dataset.check));
+  });
+  $ul.querySelectorAll("[data-edit]").forEach(b => {
+    b.addEventListener("click", () => toast("原型演示：编辑会打开行内编辑（实施后走 PUT /tidywork-api/todos/:id）"));
+  });
+}
+
+function renderProgress(){
+  const total = TODOS.length, done = TODOS.filter(t => t.done).length;
+  const pct = total ? Math.round(done/total*100) : 0;
+  document.getElementById("pctNum").textContent = pct;
+  document.getElementById("ringArc").style.strokeDashoffset = String(276.5 * (1 - pct/100));
+  document.getElementById("statDone").textContent = `${done} / ${total}`;
+  document.getElementById("statToday").textContent = `${TODOS.filter(t => dueDate(t)===TODAY).length} 条`;
+  document.getElementById("statLate").textContent = `${TODOS.filter(isLate).length} 条`;
+  document.getElementById("statMeet").textContent = `${MEETINGS.filter(m => { const s=weekStartOf(TODAY), e=addDays(s,6); return m.date>=s && m.date<=e; }).length} 场`;
+  const open = TODOS.filter(t => !t.done).length;
+  document.getElementById("progFoot").textContent = open
+    ? `还剩 ${open} 条未完成，其中 ${TODOS.filter(isLate).length} 条已逾期。`
+    : "待办全部完成，今天可以收尾了。";
+}
+
+/* 今日日程：09:00–18:00，每小时 38px */
+const HOUR_H = 38, START_H = 9, END_H = 18;
+function renderTimeline(){
+  const hours = [];
+  for (let h = START_H; h <= END_H; h++) hours.push(h);
+  document.getElementById("tlHours").style.height = `${(END_H-START_H)*HOUR_H}px`;
+  document.getElementById("tlHours").innerHTML = hours.map((h,i) =>
+    `<div class="hour" style="position:absolute;top:${i*HOUR_H-7}px;left:0">${String(h).padStart(2,"0")}:00</div>`
+  ).join("") + hours.slice(1).map((h,i) =>
+    `<div class="hl" style="top:${(i+1)*HOUR_H}px"></div>`
+  ).join("");
+
+  const $c = document.getElementById("tlContent");
+  $c.style.height = `${(END_H-START_H)*HOUR_H}px`;
+  const meets = MEETINGS.filter(m => m.date === TODAY);
+
+  if (!meets.length){
+    $c.innerHTML = `<div style="position:absolute;inset:12px 0 auto 12px;color:var(--ink3);font-size:12.5px">今天没有安排，适合安排一段深度工作。</div>`;
+    return;
+  }
+
+  // 空档：会议之间的间隔
+  const blocks = meets.map(m => {
+    const [sh, sm] = m.time.split(":").map(Number);
+    const mm = m.duration.match(/(\d{2}):(\d{2})\s*-\s*(\d{2}):(\d{2})/);
+    const s = sh + (sm || 0) / 60;
+    const e = mm ? Number(mm[3]) + Number(mm[4]) / 60 : s + 1;
+    return { ...m, s, e };
+  });
+
+  let html = "";
+  // 空档（从 9 点起，会议前后）
+  let cursor = START_H;
+  blocks.sort((a,b)=>a.s-b.s).forEach(b => {
+    if (b.s - cursor >= 1.2){
+      const top = (cursor - START_H)*HOUR_H, height = (b.s - cursor)*HOUR_H - 8;
+      html += `<div class="gap" style="top:${top+4}px;height:${height}px">${ICON.focus} 可专注 ${fmtRange(cursor, b.s)}</div>`;
+    }
+    cursor = Math.max(cursor, b.e);
+  });
+  if (END_H - cursor >= 1.2){
+    const top = (cursor - START_H)*HOUR_H, height = (END_H - cursor)*HOUR_H - 12;
+    html += `<div class="gap" style="top:${top+4}px;height:${height}px">${ICON.focus} 可安排 ${fmtRange(cursor, END_H)}</div>`;
+  }
+
+  blocks.forEach((m,i) => {
+    const top = (m.s - START_H)*HOUR_H + 4, height = Math.max(52,(m.e - m.s)*HOUR_H - 8);
+    html += `<button class="ev" style="top:${top}px;height:${height}px" data-ev="${i}" aria-expanded="false">
+      <div class="ev-t">${m.time} ${m.title}</div>
+      <div class="ev-m"><span>${m.location}</span><span>${m.participants} 人</span></div>
+      <div class="ev-detail">${m.duration} · ${m.location} · 参会 ${m.participants} 人<br>点击查看详情（原型）；实施后直接打开会议面板。</div>
+    </button>`;
+  });
+  $c.innerHTML = html;
+
+  $c.querySelectorAll("[data-ev]").forEach(el => {
+    el.addEventListener("click", () => {
+      const open = el.getAttribute("aria-expanded") === "true";
+      $c.querySelectorAll(".ev").forEach(x => x.setAttribute("aria-expanded","false"));
+      el.setAttribute("aria-expanded", open ? "false" : "true");
+    });
+  });
+}
+function fmtRange(a,b){
+  const f = n => `${String(Math.floor(n)).padStart(2,"0")}:${String(Math.round((n%1)*60)).padStart(2,"0")}`;
+  return `${f(a)}–${f(b)}`;
+}
+
+function renderNotes(){
+  document.getElementById("noteList").innerHTML = NOTES.map((n,i) => `
+    <button class="note" data-note="${i}">
+      <div class="nt">${n.title}<span class="go">打开 →</span><span class="ntime">${n.time}</span></div>
+      <div class="np">${n.preview}</div>
+    </button>`).join("");
+  document.querySelectorAll("[data-note]").forEach(b => {
+    b.addEventListener("click", () => openPreview(+b.dataset.note));
+  });
+}
+
+let pvIndex = -1;
+function openPreview(i){
+  pvIndex = i;
+  const n = NOTES[i];
+  document.getElementById("pvTitle").textContent = n.title;
+  document.getElementById("pvMeta").textContent = `最后编辑：${n.time}`;
+  document.getElementById("pvBody").textContent = n.body;
+  document.getElementById("preview").classList.add("on");
+  document.getElementById("mask").classList.add("on");
+}
+function closePreview(){
+  document.getElementById("preview").classList.remove("on");
+  document.getElementById("mask").classList.remove("on");
+}
+
+function renderQuick(){
+  const items = [
+    ["新建待办","todo",ICON.list],
+    ["新建会议","meet",ICON.cal],
+    ["新建笔记","note",ICON.note],
+    ["开始对话","chat",ICON.chat]
+  ];
+  document.getElementById("quickGrid").innerHTML = items.map(([label,key,ic]) =>
+    `<button class="q" data-q="${key}">${ic}<span>${label}</span></button>`).join("");
+  document.querySelectorAll("[data-q]").forEach(b => {
+    b.addEventListener("click", () => {
+      const k = b.dataset.q;
+      if (k === "todo") { document.getElementById("newTodoInput").focus(); toast("在这里直接输入，回车即可添加"); }
+      else if (k === "meet") toast("原型演示：实施后跳转会议面板并聚焦「+新建」");
+      else if (k === "note") go("notes");
+      else toast("原型演示：实施后唤起 DSH 原生对话");
+    });
+  });
+}
+
+function renderWeek(){
+  const start = weekStartOf(TODAY);
+  const days = [];
+  for (let i=0;i<7;i++) days.push(addDays(start,i));
+  document.getElementById("weekGrid").innerHTML = days.map(d => {
+    const todos = TODOS.filter(t => dueDate(t) === d);
+    const meets = MEETINGS.filter(m => m.date === d).length;
+    const isToday = d === TODAY;
+    const dt = D(d);
+    const dots = todos.length
+      ? todos.map(t => `<span class="td ${t.done?"on":(isLate(t)?"late":"")}"></span>`).join("")
+      : `<span class="td" style="opacity:.25"></span>`;
+    const mtxt = meets ? `会议 <b>${meets}</b>` : (todos.length ? "无会议" : "空闲");
+    return `<div class="day ${isToday?"today":""}">
+      <div class="tip">${dt.getMonth()+1}月${dt.getDate()}日 · 待办 ${todos.length} · 会议 ${meets}</div>
+      <div class="dwk">${WEEK[dt.getDay()]}${isToday?" · 今天":""}</div>
+      <div class="dd">${dt.getDate()}</div>
+      <div class="dots">${dots}</div>
+      <div class="dmt">${mtxt}</div>
+    </div>`;
+  }).join("");
+  document.getElementById("weekRange").textContent = `${D(start).getMonth()+1}月2日 – ${D(TODAY).getMonth()+1}月${D(TODAY).getDate()}日`;
+}
+
+function toggleTodo(id){
+  const t = TODOS.find(x => x.id === id);
+  if (!t) return;
+  t.done = !t.done;
+  renderAll();
+  toast(t.done ? `已完成：${t.title}` : `已恢复：${t.title}`);
+}
+
+function addTodo(title){
+  const clean = title.trim();
+  if (!clean) return;
+  TODOS.push({ id:"new"+Date.now(), title: clean, priority:"mid", category:"工作", due:"today", done:false });
+  renderAll();
+  toast(`已添加：${clean}`);
+}
+
+function renderAll(){
+  renderSummary(); renderTabs(); renderTodos(); renderProgress(); renderWeek();
+}
+
+/* toast */
+let toastTimer = null;
+function toast(msg){
+  const el = document.getElementById("toast");
+  el.textContent = msg; el.classList.add("on");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("on"), 2200);
+}
+
+function go(panel){
+  toast(`原型演示：切到「${panel === "meetings" ? "会议" : "笔记"}」面板（实施后调用 ctx.layout.selectPanel）`);
+}
+
+/* ================= 挂载 ================= */
+document.getElementById("btnChat").addEventListener("click", () => toast("原型演示：实施后唤起 DSH 原生对话"));
+document.getElementById("btnNewTodo").addEventListener("click", () => { document.getElementById("newTodoInput").focus(); });
+document.getElementById("btnNewMeeting").addEventListener("click", () => toast("原型演示：实施后跳转会议面板并聚焦「+新建」"));
+document.getElementById("btnAddTodo").addEventListener("click", () => {
+  const el = document.getElementById("newTodoInput");
+  addTodo(el.value); el.value = "";
+});
+document.getElementById("newTodoInput").addEventListener("keydown", e => {
+  if (e.key === "Enter"){ addTodo(e.target.value); e.target.value = ""; }
+});
+document.querySelectorAll("[data-goto]").forEach(b => b.addEventListener("click", () => go(b.dataset.goto)));
+document.getElementById("pvClose").addEventListener("click", closePreview);
+document.getElementById("pvCancel").addEventListener("click", closePreview);
+document.getElementById("mask").addEventListener("click", closePreview);
+document.getElementById("pvOpen").addEventListener("click", () => {
+  const n = NOTES[pvIndex];
+  closePreview();
+  toast(`原型演示：打开「${n ? n.title : "笔记"}」（实施后选中该笔记并切到笔记面板）`);
+});
+document.addEventListener("keydown", e => { if (e.key === "Escape") closePreview(); });
+
+renderTimeline(); renderNotes(); renderQuick(); renderAll();
+</script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "meta": {
+    "title": "TidyWork 工作区",
+    "description": "在 DSH 侧边栏提供工作台、待办、会议、笔记四个工作区页面，数据存于 DSH profile 数据目录。"
+  },
+  "panel": "工作区",
+  "todos": "待办",
+  "meetings": "会议",
+  "notes": "笔记"
+}

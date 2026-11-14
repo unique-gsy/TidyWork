@@ -1,0 +1,16 @@
+# ============================================================================
+# TidyWork · 第二步：把插件叠加到已部署的 DSH 上（override 文件，不单独使用）
+#
+#   docker compose -f docker-compose.yml -f docker-compose.plugin.yml up -d
+#
+# 做的事：把仓库里的 plugin/ 挂进容器，容器重启时 entry.sh 检测到插件就装进
+# DSH 的 web profile，侧边栏出现「TidyWork」入口（工作台 / 待办 / 会议 / 笔记）。
+# 只改插件代码不需要重建镜像：改完 docker restart tidywork-dsh 即可（entry.sh 会 diff 更新）。
+# ============================================================================
+
+name: tidywork
+
+services:
+  dsh:
+    volumes:
+      - ./plugin:/opt/tidywork-plugin:ro

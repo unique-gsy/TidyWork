@@ -1,0 +1,33 @@
+# ============================================================================
+# TidyWork · 第一步：部署 DSH（DeepSeek Harness）
+#
+#   cp .env.example .env      # 首次：填 DEEPSEEK_API_KEY（或留空后登录账号）
+#   docker compose up -d --build
+#
+# 访问：http://localhost:3080（带 token 的完整地址见 data/context/dsh-web-url.txt）
+# 此时是纯 DSH：有原生对话，侧边栏没有「TidyWork」工作区入口。
+#
+# 下一步（叠加插件）：docker compose -f docker-compose.yml -f docker-compose.plugin.yml up -d
+# ============================================================================
+
+name: tidywork
+
+services:
+  dsh:
+    build:
+      context: .
+      dockerfile: dsh/Dockerfile
+    image: tidywork-dsh:latest
+    container_name: tidywork-dsh
+    restart: unless-stopped
+    ports:
+      - "${DSH_WEB_PORT:-3080}:3080"
+    environment:
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      # 宿主机端口（仅用于生成正确的访问地址，写进 data/context/dsh-web-url.txt）
+      - DSH_HOST_PORT=${DSH_WEB_PORT:-3080}
+    volumes:
+      # DSH 数据（workspace / sessions / 登录凭据 / 插件安装结果），容器重建不丢
+      - ${TIDYWORK_DATA_DIR:-./data}/dsh:/root/.dsh
+      # 个人上下文（可选，放 context.md 助手每次回答都会参考）
+      - ${TIDYWORK_DATA_DIR:-./data}/context:/data
