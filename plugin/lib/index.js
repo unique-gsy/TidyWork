@@ -123,6 +123,22 @@ async function readStore(file, seedsKey) {
   }
 }
 
+/** 统一日志：一条请求一行，错误带堆栈。全部走 stdout，docker logs 可见。 */
+function logInfo(msg) {
+  console.log("[tidywork] INFO  " + msg);
+}
+function logError(msg) {
+  console.error("[tidywork] ERROR " + msg);
+}
+
+/** 500 统一出口：先记错误（带请求上下文与堆栈），再回包（不把堆栈吐给前端）。 */
+function serverError(res, error) {
+  const ctx = res && res._twReq ? res._twReq : "";
+  logError((ctx ? ctx + " " : "") + (error && error.stack ? error.stack : String(error)));
+  const msg = error && error.message ? error.message : String(error);
+  sendJson(res, 500, { ok: false, error: "服务器内部错误：" + msg });
+}
+
 /** 写队列：同一资源的写请求串行执行，避免读-改-写竞态互相覆盖。 */
 const writeQueues = new Map();
 function withQueue(key, fn) {
@@ -181,7 +197,7 @@ async function routeCore(req, res, url) {
           const items = filterTodos(store.items || [], url.searchParams.get("view"), url.searchParams.get("category"));
           sendJson(res, 200, { ok: true, data: items });
         } catch (error) {
-          sendJson(res, 500, { ok: false, error: String(error) });
+          serverError(res, error);
         }
         return;
       }
@@ -207,7 +223,7 @@ async function routeCore(req, res, url) {
           await saveStore(file, store);
           sendJson(res, 200, { ok: true, data: item });
         } catch (error) {
-          sendJson(res, 500, { ok: false, error: String(error) });
+          serverError(res, error);
         }
         return;
       }
@@ -241,7 +257,7 @@ async function routeCore(req, res, url) {
         }
         sendJson(res, 405, { ok: false, error: "method not allowed" });
       } catch (error) {
-        sendJson(res, 500, { ok: false, error: String(error) });
+        serverError(res, error);
       }
       return;
     }
@@ -260,7 +276,7 @@ async function routeCore(req, res, url) {
           items = items.slice().sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")) || String(a.time || "").localeCompare(String(b.time || "")));
           sendJson(res, 200, { ok: true, data: items });
         } catch (error) {
-          sendJson(res, 500, { ok: false, error: String(error) });
+          serverError(res, error);
         }
         return;
       }
@@ -288,7 +304,7 @@ async function routeCore(req, res, url) {
           await saveStore(file, store);
           sendJson(res, 200, { ok: true, data: item });
         } catch (error) {
-          sendJson(res, 500, { ok: false, error: String(error) });
+          serverError(res, error);
         }
         return;
       }
@@ -304,6 +320,34 @@ async function routeCore(req, res, url) {
           sendJson(res, 404, { ok: false, error: "会议不存在" });
           return;
         }
+        if (req.method === "PATCH") {
+          // 局部更新：只改传上来的字段，其余保留（编辑会议时间不必重填全部信息）
+          const reqBody = JSON.parse(await readBody(req));
+          const meet = (store.items || []).find((x) => x.id === id);
+          if ("title" in reqBody) {
+            const t = escStr(reqBody.title, 60).trim();
+            if (!t) {
+              sendJson(res, 400, { ok: false, error: "标题不能为空" });
+              return;
+            }
+            meet.title = t;
+          }
+          if ("date" in reqBody) {
+            const d = escStr(reqBody.date, 10).trim();
+            if (!d) {
+              sendJson(res, 400, { ok: false, error: "日期不能为空" });
+              return;
+            }
+            meet.date = d;
+          }
+          if ("time" in reqBody) meet.time = escStr(reqBody.time || "09:00", 5);
+          if ("duration" in reqBody) meet.duration = escStr(reqBody.duration || "09:00 - 10:00", 40);
+          if ("location" in reqBody) meet.location = escStr(reqBody.location || "线上会议", 40);
+          if ("participants" in reqBody) meet.participants = parseInt(reqBody.participants, 10) || 1;
+          await saveStore(file, store);
+          sendJson(res, 200, { ok: true, data: meet });
+          return;
+        }
         if (req.method === "DELETE") {
           store.items = (store.items || []).filter((x) => x.id !== id);
           await saveStore(file, store);
@@ -312,7 +356,7 @@ async function routeCore(req, res, url) {
         }
         sendJson(res, 405, { ok: false, error: "method not allowed" });
       } catch (error) {
-        sendJson(res, 500, { ok: false, error: String(error) });
+        serverError(res, error);
       }
       return;
     }
@@ -333,7 +377,7 @@ async function routeCore(req, res, url) {
           }));
           sendJson(res, 200, { ok: true, data: items });
         } catch (error) {
-          sendJson(res, 500, { ok: false, error: String(error) });
+          serverError(res, error);
         }
         return;
       }
@@ -355,7 +399,7 @@ async function routeCore(req, res, url) {
           await saveStore(file, store);
           sendJson(res, 200, { ok: true, data: note });
         } catch (error) {
-          sendJson(res, 500, { ok: false, error: String(error) });
+          serverError(res, error);
         }
         return;
       }
@@ -396,7 +440,7 @@ async function routeCore(req, res, url) {
         }
         sendJson(res, 405, { ok: false, error: "method not allowed" });
       } catch (error) {
-        sendJson(res, 500, { ok: false, error: String(error) });
+        serverError(res, error);
       }
       return;
     }
@@ -407,6 +451,15 @@ async function routeCore(req, res, url) {
 
 /** 处理 /tidywork-api/*：GET 直读（原子写保证文件完整），写请求按资源排队。 */
 async function handle(req, res, url) {
+  const t0 = Date.now();
+  res._twReq = req.method + " " + url.pathname + (url.search || "");
+  // 请求结束统一记一行：状态码 >=500 走 ERROR，其余 INFO
+  res.on("finish", () => {
+    const ms = Date.now() - t0;
+    const line = res._twReq + " -> " + res.statusCode + " " + ms + "ms";
+    if (res.statusCode >= 500) logError(line);
+    else logInfo(line);
+  });
   if (req.method === "GET") return routeCore(req, res, url);
   const segs = url.pathname.split("/").filter(Boolean);
   const key = segs[0] === "tidywork-api" ? (segs[1] || "root") : "root";
@@ -550,7 +603,7 @@ async function apply(ctx) {
         const url = new URL(req.url ?? "/", "http://dsh.internal");
         await handle(req, res, url);
       } catch (error) {
-        sendJson(res, 500, { ok: false, error: String(error) });
+        serverError(res, error);
       }
     }
   });

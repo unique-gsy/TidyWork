@@ -326,6 +326,8 @@ window.__ModuleLoader__.load({
 			const [form, setForm] = useState({ title: "", priority: "mid", category: "工作", due: "today" });
 			const [hoverId, setHoverId] = useState(null);
 			const [confirmDel, setConfirmDel] = useState(null);
+			const [q, setQ] = useState("");
+			const [sortBy, setSortBy] = useState("smart");
 
 			const load = useCallback(() => {
 				let url = "/tidywork-api/todos?view=" + encodeURIComponent(view);
@@ -423,20 +425,38 @@ window.__ModuleLoader__.load({
 					load();
 				}).catch((e) => toast(e.message));
 			};
-			// 未完成在前（优先级 + 截止临近），已完成沉底
+			// —— 排序：统一规则是先未完成、后已完成，再按选定维度 ——
 			const PRIO_W = { high: 0, mid: 1, low: 2 };
-			const DUE_W = { today: 0, tomorrow: 1, week: 2, none: 3 };
-			const sortedItems = items.slice().sort((a, b) => {
-				const ad = a.done ? 1 : 0;
-				const bd = b.done ? 1 : 0;
-				if (ad !== bd) return ad - bd;
-				if (!a.done) {
-					const p = (PRIO_W[a.priority] != null ? PRIO_W[a.priority] : 1) - (PRIO_W[b.priority] != null ? PRIO_W[b.priority] : 1);
-					if (p) return p;
-					return (DUE_W[a.due] != null ? DUE_W[a.due] : 3) - (DUE_W[b.due] != null ? DUE_W[b.due] : 3);
-				}
-				return 0;
-			});
+			// 截止日折算成"距今天数"：today=0、tomorrow=1、week=5、具体日期按天数差（负数即逾期）
+			const dueDays = (t) => {
+				const d = String(t.due || "");
+				if (d === "today") return 0;
+				if (d === "tomorrow") return 1;
+				if (d === "week") return 5;
+				if (!d || d === "none") return 9999;
+				const p = d.split("-");
+				if (p.length !== 3) return 9999;
+				const dt = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+				if (isNaN(dt.getTime())) return 9999;
+				const now = new Date();
+				return Math.round((new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()) - new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 86400000);
+			};
+			const prioW = (t) => (PRIO_W[t.priority] != null ? PRIO_W[t.priority] : 1);
+			const doneW = (t) => (t.done ? 1 : 0);
+			const byTitle = (a, b) => String(a.title || "").localeCompare(String(b.title || ""), "zh");
+			const CMP = {
+				smart: (a, b) => doneW(a) - doneW(b) || prioW(a) - prioW(b) || dueDays(a) - dueDays(b),
+				due: (a, b) => doneW(a) - doneW(b) || dueDays(a) - dueDays(b) || prioW(a) - prioW(b),
+				prio: (a, b) => doneW(a) - doneW(b) || prioW(a) - prioW(b) || dueDays(a) - dueDays(b),
+				title: (a, b) => doneW(a) - doneW(b) || byTitle(a, b),
+				created: (a, b) => doneW(a) - doneW(b) // items 本身即创建顺序
+			};
+			// —— 搜索：标题 / 分类 / 截止文案，大小写不敏感 ——
+			const kw = q.trim().toLowerCase();
+			const matched = kw
+				? items.filter((t) => (String(t.title || "") + " " + String(t.category || "") + " " + String(DUE_LABEL[t.due] || t.due || "")).toLowerCase().indexOf(kw) !== -1)
+				: items;
+			const sortedItems = matched.slice().sort(CMP[sortBy] || CMP.smart);
 			// 分类栏：固定三分类 + 数据中出现过的其他分类
 			const allItems = (stats && stats.allItems) || [];
 			const extraCats = [];
@@ -533,13 +553,42 @@ window.__ModuleLoader__.load({
 						"div",
 						{ style: S.headRow },
 						h("span", { style: S.viewTitle }, titles[view] || "待办"),
+						kw ? h("span", { style: { fontSize: 12, color: C.text2, marginRight: "auto", marginLeft: 10 } }, "匹配 " + sortedItems.length + " 条") : null,
 						h(Chip, { active: true, onClick: openAdd }, "+ 新增")
+					),
+					h(
+						"div",
+						{ style: { display: "flex", gap: 8, alignItems: "center", marginBottom: 12 } },
+						h("input", {
+							style: Object.assign({}, S.input, { flex: 1, padding: "8px 12px", fontSize: 13 }),
+							placeholder: "搜索待办（标题 / 分类 / 截止）",
+							value: q,
+							onChange: (e) => setQ(e.target.value)
+						}),
+						h(
+							"select",
+							{ style: Object.assign({}, S.input, { width: 120, padding: "8px 10px", fontSize: 13, cursor: "pointer" }), value: sortBy, onChange: (e) => setSortBy(e.target.value) },
+							h("option", { value: "smart" }, "智能排序"),
+							h("option", { value: "due" }, "按截止日"),
+							h("option", { value: "prio" }, "按优先级"),
+							h("option", { value: "title" }, "按标题"),
+							h("option", { value: "created" }, "按创建顺序")
+						),
+						kw ? h(Chip, { onClick: () => setQ("") }, "清除") : null
 					),
 					h(
 						"div",
 						{ style: S.card },
 						sortedItems.length === 0
-							? h(
+							? kw
+								? h(
+										"div",
+										{ style: { padding: "48px 24px", textAlign: "center", color: C.text2 } },
+										h("div", { style: { fontSize: 14, fontWeight: 500, color: C.text1, marginBottom: 4 } }, "没有匹配的待办"),
+										h("div", { style: { fontSize: 12, marginBottom: 16 } }, "关键词「" + q.trim() + "」在这个视图里没有命中"),
+										h(Chip, { onClick: () => setQ("") }, "清除搜索")
+									)
+								: h(
 									"div",
 									{ style: { padding: "48px 24px", textAlign: "center", color: C.text2 } },
 									h(
@@ -638,6 +687,7 @@ window.__ModuleLoader__.load({
 			const [byDay, setByDay] = useState({});
 			const [dayView, setDayView] = useState(null);
 			const [modal, setModal] = useState(false);
+			const [editId, setEditId] = useState(null);
 			const [form, setForm] = useState({ title: "", date: "", time: "09:00", duration: "", location: "", participants: "1" });
 
 			const load = useCallback((m) => {
@@ -692,27 +742,49 @@ window.__ModuleLoader__.load({
 					setModal(true);
 				});
 			};
+			// 编辑：直接开弹窗并回填原值（新建才走"跳会话用自然语言建"那条路）
+			const openEdit = (m) => {
+				setEditId(m.id);
+				setForm({
+					title: m.title || "",
+					date: m.date || "",
+					time: m.time || "09:00",
+					duration: m.duration || "",
+					location: m.location || "",
+					participants: String(m.participants == null ? 1 : m.participants)
+				});
+				setModal(true);
+			};
 			const save = () => {
 				if (!form.title.trim()) {
 					toast("请输入会议标题");
 					return;
 				}
-				api("/tidywork-api/meetings", {
-					method: "POST",
-					body: JSON.stringify({
-						title: form.title.trim(),
-						date: form.date,
-						time: form.time || "09:00",
-						duration: form.duration || "09:00 - 10:00",
-						location: form.location.trim() || "线上会议",
-						participants: parseInt(form.participants || "1", 10)
-					})
+				if (!form.date) {
+					toast("请选择会议日期");
+					return;
+				}
+				const payload = {
+					title: form.title.trim(),
+					date: form.date,
+					time: form.time || "09:00",
+					duration: form.duration || "09:00 - 10:00",
+					location: form.location.trim() || "线上会议",
+					participants: parseInt(form.participants || "1", 10)
+				};
+				const req = editId
+					? api("/tidywork-api/meetings/" + editId, { method: "PATCH", body: JSON.stringify(payload) })
+					: api("/tidywork-api/meetings", { method: "POST", body: JSON.stringify(payload) });
+				req.then(() => {
+					const wasEdit = !!editId;
+					setModal(false);
+					setEditId(null);
+					toast(wasEdit ? "会议已更新" : "会议已创建");
+					// 日期改到别的月份时跟着跳过去，否则停在原地刷新
+					const m2 = String(payload.date).slice(0, 7);
+					if (m2 && m2 !== month) setMonth(m2);
+					else load(month);
 				})
-					.then(() => {
-						setModal(false);
-						toast("会议已创建");
-						load(month);
-					})
 					.catch((e) => toast(e.message));
 			};
 			// 会议 → 待办：把这场会的跟进项落到待办清单（标题带上下文，日期沿用会议日期）
@@ -960,6 +1032,7 @@ window.__ModuleLoader__.load({
 																	"span",
 																	{ style: { display: "flex", gap: 8, alignItems: "center" } },
 																	h("span", { style: { fontSize: 11, padding: "2px 8px", background: badgeBg, color: badgeColor, borderRadius: 10 } }, m.statusText),
+																	h("span", { style: { fontSize: 11, color: C.accent, cursor: "pointer", marginRight: 10 }, onClick: () => openEdit(m) }, "编辑"),
 																	h("span", { style: { fontSize: 11, color: C.text2, cursor: "pointer" }, onClick: () => remove(m.id) }, "删除")
 																)
 															),
@@ -995,7 +1068,7 @@ window.__ModuleLoader__.load({
 				),
 				h(
 					Modal,
-					{ open: modal, title: "新建会议", onClose: () => setModal(false) },
+					{ open: modal, title: editId ? "编辑会议" : "新建会议", onClose: () => { setModal(false); setEditId(null); } },
 					h(
 						Field,
 						{ label: "会议标题" },
@@ -1030,7 +1103,7 @@ window.__ModuleLoader__.load({
 						"div",
 						{ style: S.footRow },
 						h(Btn, { onClick: () => setModal(false) }, "取消"),
-						h(Btn, { primary: true, onClick: save }, "创建")
+						h(Btn, { primary: true, onClick: save }, editId ? "保存" : "创建")
 					)
 				)
 			);

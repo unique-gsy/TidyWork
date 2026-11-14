@@ -4,6 +4,8 @@
 
 不是 fork，不改 DSH 源码——插件通过 DSH 官方的 `dsh plugin` 机制挂进 `web` profile，UI 与数据通道全部复用宿主能力，所以 DSH 升级了插件也能跟着用。
 
+四块面板都能就地编辑：待办可勾选/改优先级/删除，会议可增删改（「编辑」回填表单后 PATCH 局部更新），待办面板带搜索框与五种排序（智能 / 截止日 / 优先级 / 标题 / 创建顺序），会议卡还能一键「生成待办 →」把会后跟进落到清单。
+
 ## 部署分两步
 
 先起 DSH，确认能用，再叠插件。这样的好处是：DSH 本身出问题时，能立刻分清是 DSH 的问题还是插件的问题。
@@ -87,5 +89,7 @@ docs/                          改版方案、功能测试点与测试报告、�
 **拉不到基础镜像 / npm 超时**：基础镜像走国内代理 `docker compose build --build-arg BASE_IMAGE=dockerproxy.net/library/node:22-bookworm-slim`；npm 慢可在 `dsh/Dockerfile` 的安装行加 `--registry=https://registry.npmmirror.com`。
 
 **想退回纯 DSH**：`docker compose -f docker-compose.yml up -d`（去掉 override 再重建），插件文件留在 `data/dsh` 里不影响，需要时再加回来。
+
+**想看插件请求日志**：`docker compose logs dsh | grep tidywork`——一行一个请求（`[tidywork] INFO  GET /tidywork-api/todos?view=all -> 200 2ms`），出错走 `[tidywork] ERROR` 并带堆栈；容器内另有一份完整副本在 `/dsh-web.log`。
 
 **插件装了但侧边栏没入口**：`docker compose logs dsh | grep TidyWork` 看是"已安装"还是"安装失败"；失败会把 pnpm 日志打出来。

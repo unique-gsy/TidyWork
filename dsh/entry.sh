@@ -38,6 +38,10 @@ dsh web --host "$IP" --port 3080 --no-open --trusted-host "$IP:3080" > /dsh-web.
 DSH_PID=$!
 echo "TidyWork: dsh web pid=$DSH_PID ($IP:3080)"
 
+# 日志转一份到容器 stdout：`docker compose logs` 也能看到插件请求日志；
+# /dsh-web.log 仍保留，供下面解析 token
+tail -n +1 -f /dsh-web.log 2>/dev/null &
+
 for i in $(seq 1 30); do
   if grep -q "token=" /dsh-web.log 2>/dev/null; then
     URL=$(grep -o "http://[^ ]*" /dsh-web.log | head -1)
