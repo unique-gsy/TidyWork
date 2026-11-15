@@ -35,25 +35,61 @@ window.__ModuleLoader__.load({
 		let react = require("react");
 		let { useEffect, useState, useCallback } = react;
 
-		// ===== 常量：8080 工作台浅色主题 =====
+		// ===== 常量：工作台色板（跟随 DSH 宿主主题）=====
+		// DSH 用 body[data-ds-dark-theme] 切换深浅，并把所有颜色发布成 --dsw-alias-* 设计 token。
+		// 这里全部改读宿主的 token，插件就不再自绘一套浅色皮肤：侧栏深、工作台也深，
+		// 卡片比底色亮一档、边框是半透明白，跟侧栏同一套语言。第二个参数是脱离宿主时的兜底原值。
+		// --tw-*（强调色与状态色）由 injectThemeCss() 按主题注入两套，见下。
 		const C = {
-			page: "#f5f5f5",
-			main: "#ffffff",
-			hover: "#ebebeb",
-			active: "#e0e0e0",
-			input: "#ffffff",
-			border: "#e5e6eb",
-			borderLight: "#f0f0f0",
-			text0: "#1f2329",
-			text1: "#646a73",
-			text2: "#8f959e",
-			accent: "#3370ff",
-			accentHover: "#2860e1",
-			accentSoft: "rgba(51,112,255,0.08)",
-			success: "#34c759",
-			warning: "#ff9500",
-			danger: "#ff3b30"
+			// 页面底色不能用 bg-base：宿主浅色主题下它就是纯白，和卡片（layer-1 也是纯白）
+			// 会糊成一片。这里按 4% 文字色压暗一档——浅色得到 #f4f4f4（正是原来的灰底），
+			// 深色得到比 #151517 略亮的深灰，卡片仍亮一档，两种主题都有层次。
+			page: "color-mix(in srgb, var(--dsw-alias-label-primary, #1f2329) 4%, var(--dsw-alias-bg-base, #fff))",
+			main: "var(--dsw-alias-bg-layer-1, #ffffff)",
+			// 宿主的 layer-2/3 在浅色主题下与 layer-1 同值，做不出 hover/active，
+			// 因此改用文字色叠加：浅色叠黑、深色叠白，两个主题下都看得见。
+			hover: "color-mix(in srgb, var(--dsw-alias-label-primary, #1f2329) 6%, transparent)",
+			active: "color-mix(in srgb, var(--dsw-alias-label-primary, #1f2329) 12%, transparent)",
+			input: "var(--dsw-alias-bg-layer-2, #ffffff)",
+			border: "var(--dsw-alias-border-l2, #e5e6eb)",
+			borderLight: "var(--dsw-alias-border-l1, #f0f0f0)",
+			text0: "var(--dsw-alias-label-primary, #1f2329)",
+			text1: "var(--dsw-alias-label-secondary, #646a73)",
+			text2: "var(--dsw-alias-label-caption, #8f959e)",
+			accent: "var(--tw-accent, #3370ff)",
+			accentHover: "var(--tw-accent-hover, #2860e1)",
+			accentSoft: "var(--tw-accent-soft, rgba(51,112,255,0.08))",
+			success: "var(--tw-success, #34c759)",
+			warning: "var(--tw-warning, #ff9500)",
+			danger: "var(--tw-danger, #ff3b30)",
+			mask: "var(--dsw-alias-bg-mask-1, rgba(0,0,0,0.4))",
+			onAccent: "var(--tw-on-accent, #ffffff)"
 		};
+
+		// 强调色 / 状态色的深浅两套。宿主的 --dsw-alias-* 只管中性色，品牌色归插件自己，
+		// 深色下必须提亮（#3370ff 在近黑背景上偏闷），沿用同一色相、只调亮度。
+		const THEME_CSS = [
+			":root{",
+			"--tw-accent:#3370ff;",
+			"--tw-accent-hover:#2860e1;",
+			"--tw-accent-soft:rgba(51,112,255,0.08);",
+			"--tw-success:#34c759;",
+			"--tw-warning:#ff9500;",
+			"--tw-danger:#ff3b30;",
+			"--tw-on-accent:#ffffff;",
+			"--tw-toast-bg:#1f2329;",
+			"}",
+			"body[data-ds-dark-theme]{",
+			"--tw-accent:#6b9fff;",
+			"--tw-accent-hover:#8ab0ff;",
+			"--tw-accent-soft:rgba(107,159,255,0.16);",
+			"--tw-success:#30d158;",
+			"--tw-warning:#ffd60a;",
+			"--tw-danger:#ff453a;",
+			"--tw-on-accent:#ffffff;",
+			"--tw-toast-bg:#3a3a3c;",
+			"}"
+		].join("");
 		const FONT = "-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif";
 		const PRIORITY = {
 			high: { color: C.danger, label: "高优先级" },
@@ -65,6 +101,9 @@ window.__ModuleLoader__.load({
 
 		// ===== 工具 =====
 		const h = react.createElement;
+		// 半透明底色：直接写 rgba 在深色主题下叠不出来，用 color-mix 让它跟着主题变色。
+		const tint = (color, pct) => "color-mix(in srgb, " + color + " " + pct + "%, transparent)";
+
 		function esc(s) {
 			return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 		}
@@ -177,7 +216,7 @@ window.__ModuleLoader__.load({
 				el = document.createElement("div");
 				el.id = "tw-toast";
 				el.style.cssText =
-					"position:fixed;bottom:80px;left:50%;transform:translateX(-50%) translateY(10px);background:#1f2329;color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;z-index:99999;opacity:0;transition:opacity .2s,transform .2s;pointer-events:none;box-shadow:0 4px 16px rgba(0,0,0,.18);font-family:" + FONT + ";display:flex;align-items:center;gap:12px;white-space:nowrap;";
+					"position:fixed;bottom:80px;left:50%;transform:translateX(-50%) translateY(10px);background:var(--tw-toast-bg,#1f2329);color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;z-index:99999;opacity:0;transition:opacity .2s,transform .2s;pointer-events:none;box-shadow:0 4px 16px rgba(0,0,0,.18);font-family:" + FONT + ";display:flex;align-items:center;gap:12px;white-space:nowrap;";
 				document.body.appendChild(el);
 			}
 			const hide = () => {
@@ -248,8 +287,8 @@ window.__ModuleLoader__.load({
 			input: { width: "100%", padding: "8px 10px", border: "1px solid " + C.border, borderRadius: 6, background: C.input, fontSize: 13, color: C.text0, outline: "none", boxSizing: "border-box", fontFamily: FONT },
 			select: { width: "100%", padding: "8px 10px", border: "1px solid " + C.border, borderRadius: 6, background: C.input, color: C.text0, fontSize: 13, boxSizing: "border-box", fontFamily: FONT },
 			btnGhost: { display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 16px", borderRadius: 6, border: "1px solid " + C.border, color: C.text1, fontSize: 13, cursor: "pointer", background: C.main, fontFamily: FONT },
-			btnPrimary: { display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 16px", borderRadius: 6, background: C.accent, color: "#fff", fontSize: 13, fontWeight: 500, cursor: "pointer", border: "none", fontFamily: FONT },
-			modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10000 },
+			btnPrimary: { display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 16px", borderRadius: 6, background: C.accent, color: C.onAccent, fontSize: 13, fontWeight: 500, cursor: "pointer", border: "none", fontFamily: FONT },
+			modalOverlay: { position: "fixed", inset: 0, background: C.mask, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10000 },
 			modal: { width: 440, maxWidth: "92vw", background: C.main, border: "1px solid " + C.border, borderRadius: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.16)", padding: 20, boxSizing: "border-box" },
 			modalHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 },
 			modalTitle: { fontSize: 16, fontWeight: 600 },
@@ -613,7 +652,7 @@ window.__ModuleLoader__.load({
 											? h(
 													"div",
 													{ title: "取消完成", style: { width: 20, height: 20, background: C.success, borderRadius: 6, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }, onClick: () => toggle(it.id, false) },
-													h("svg", { width: 14, height: 14, viewBox: "0 0 24 24", fill: "none", stroke: "#fff", strokeWidth: 3, strokeLinecap: "round", strokeLinejoin: "round" }, h("polyline", { points: "20 6 9 17 4 12" }))
+													h("svg", { width: 14, height: 14, viewBox: "0 0 24 24", fill: "none", stroke: C.onAccent, strokeWidth: 3, strokeLinecap: "round", strokeLinejoin: "round" }, h("polyline", { points: "20 6 9 17 4 12" }))
 												)
 											: h("div", { title: "标记完成", style: { width: 20, height: 20, border: "2px solid " + (PRIORITY[it.priority] || PRIORITY.mid).color, borderRadius: 6, flexShrink: 0, cursor: "pointer" }, onClick: () => toggle(it.id, true) }),
 										h(
@@ -623,7 +662,7 @@ window.__ModuleLoader__.load({
 											h(
 												"div",
 												{ style: { fontSize: 12, color: C.text2, marginTop: 4, display: "flex", gap: 8, alignItems: "center" } },
-												h("span", { style: { padding: "1px 6px", background: "rgba(255,59,48,0.08)", color: (PRIORITY[it.priority] || PRIORITY.mid).color, borderRadius: 4, fontSize: 11 } }, (PRIORITY[it.priority] || PRIORITY.mid).label),
+												h("span", { style: { padding: "1px 6px", background: tint(C.danger, 12), color: (PRIORITY[it.priority] || PRIORITY.mid).color, borderRadius: 4, fontSize: 11 } }, (PRIORITY[it.priority] || PRIORITY.mid).label),
 												h("span", { style: { padding: "1px 6px", background: C.accentSoft, color: C.accent, borderRadius: 4, fontSize: 11 } }, esc(it.category || "")),
 												h("span", null, esc(DUE_LABEL[it.due] || it.due || "")),
 												h("span", { style: { color: C.text2, cursor: "pointer", fontSize: 11 }, onClick: () => openEdit(it) }, "编辑"),
@@ -833,11 +872,11 @@ window.__ModuleLoader__.load({
 							style: { minHeight: 90, padding: 8, cursor: "pointer", boxSizing: "border-box", borderRight: lastCol ? "none" : "1px solid " + C.borderLight, borderBottom: lastRow ? "none" : "1px solid " + C.borderLight, background: isToday ? C.accentSoft : "transparent" },
 							onClick: () => selectDate(d)
 						},
-						h("div", { style: { width: 24, height: 24, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, marginBottom: 4, background: isToday ? C.accent : "transparent", color: isToday ? "#fff" : "inherit" } }, d),
+						h("div", { style: { width: 24, height: 24, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, marginBottom: 4, background: isToday ? C.accent : "transparent", color: isToday ? C.onAccent : "inherit" } }, d),
 						meets.slice(0, 2).map((m) =>
 							h(
 								"div",
-								{ key: m.id, style: { fontSize: 11, padding: "1px 4px", borderRadius: 3, marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: m.status === "done" ? C.text2 : C.accent, background: m.status === "done" ? "transparent" : "rgba(51,112,255,0.1)" } },
+								{ key: m.id, style: { fontSize: 11, padding: "1px 4px", borderRadius: 3, marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: m.status === "done" ? C.text2 : C.accent, background: m.status === "done" ? "transparent" : tint(C.accent, 10) } },
 								m.time + " " + m.title
 							)
 						),
@@ -1586,7 +1625,7 @@ window.__ModuleLoader__.load({
 					contentNodes.push(
 						h(
 							"div",
-							{ key: "gap" + i, style: { position: "absolute", left: 6, right: 8, top, height: h2, borderRadius: 8, background: "#fafbfc", border: "1px dashed " + C.border, color: C.text2, fontSize: 11, display: "flex", alignItems: h2 >= 40 ? "flex-start" : "center", justifyContent: "flex-start", paddingLeft: 10, paddingTop: h2 >= 40 ? 7 : 0, gap: 6, boxSizing: "border-box" } },
+							{ key: "gap" + i, style: { position: "absolute", left: 6, right: 8, top, height: h2, borderRadius: 8, background: C.main, border: "1px dashed " + C.border, color: C.text2, fontSize: 11, display: "flex", alignItems: h2 >= 40 ? "flex-start" : "center", justifyContent: "flex-start", paddingLeft: 10, paddingTop: h2 >= 40 ? 7 : 0, gap: 6, boxSizing: "border-box" } },
 							h(HIcon, { d: "focus", size: 12, style: { opacity: 0.55 } }),
 							h("span", null, "可专注 " + hm(g.from) + "–" + hm(g.to))
 						)
@@ -1627,7 +1666,7 @@ window.__ModuleLoader__.load({
 									borderRadius: 8, padding: compact ? "3px 8px" : "5px 9px", overflow: "hidden"
 								}
 							},
-							h("div", { style: { fontSize: 12, fontWeight: 600, color: "#245bdb", display: "flex", gap: 6, lineHeight: 1.35 } },
+							h("div", { style: { fontSize: 12, fontWeight: 600, color: C.accent, display: "flex", gap: 6, lineHeight: 1.35 } },
 								h("span", { style: { flexShrink: 0 } }, b.m.time),
 								h("span", { style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, b.m.title),
 								over ? h("span", { style: { flexShrink: 0, fontSize: 10, fontWeight: 500, color: "#8a93a6", background: "#eef1f6", borderRadius: 4, padding: "0 4px", lineHeight: "15px" } }, b.start < TL_START ? "早于视图" : "晚于视图") : null
@@ -1674,16 +1713,16 @@ window.__ModuleLoader__.load({
 						return h(
 							"div",
 							{ key: d, style: { display: "flex", alignItems: "center", gap: 8, padding: "6px 6px", borderRadius: 7, background: isToday ? C.accentSoft : "transparent" } },
-							h("span", { style: { fontSize: 11.5, color: isToday ? "#245bdb" : C.text2, width: 62, flexShrink: 0, whiteSpace: "nowrap" } }, HOME_WEEK[dt.getDay()].slice(1) + " " + (dt.getMonth() + 1) + "/" + dt.getDate()),
+							h("span", { style: { fontSize: 11.5, color: isToday ? C.accent : C.text2, width: 62, flexShrink: 0, whiteSpace: "nowrap" } }, HOME_WEEK[dt.getDay()].slice(1) + " " + (dt.getMonth() + 1) + "/" + dt.getDate()),
 							h(
 								"div",
 								{ style: { display: "flex", alignItems: "center", gap: 4, minWidth: 34, flexShrink: 0 } },
 								dots.length
-									? dots.map((t, i) => h("span", { key: i, title: t.title, style: { width: 9, height: 9, borderRadius: 2, background: t.done ? C.accent : "transparent", border: "1.5px solid " + (t.done ? C.accent : isLate(t) ? C.danger : "#c4cad4"), boxSizing: "border-box" } }))
+									? dots.map((t, i) => h("span", { key: i, title: t.title, style: { width: 9, height: 9, borderRadius: 2, background: t.done ? C.accent : "transparent", border: "1.5px solid " + (t.done ? C.accent : isLate(t) ? C.danger : C.text2), boxSizing: "border-box" } }))
 									: h("span", { style: { fontSize: 10, color: "#c9ced8" } }, "—"),
 								ts.length > 5 ? h("span", { style: { fontSize: 9, color: C.text2 } }, "+" + (ts.length - 5)) : null
 							),
-							h("span", { style: { fontSize: 10.5, color: isToday ? "#245bdb" : C.text2, marginLeft: "auto", whiteSpace: "nowrap" } }, label)
+							h("span", { style: { fontSize: 10.5, color: isToday ? C.accent : C.text2, marginLeft: "auto", whiteSpace: "nowrap" } }, label)
 						);
 					})
 				);
@@ -1699,10 +1738,12 @@ window.__ModuleLoader__.load({
 				"div",
 				{ style: { flex: 1, display: "flex", flexDirection: "column", height: "100%", background: C.page, color: C.text0, fontFamily: FONT, fontSize: 14, boxSizing: "border-box", minHeight: 0, overflowY: "auto" } },
 
-				// 顶栏
+				// 顶栏。data-window-drag 是 macOS 桌面端的窗口拖拽标记：
+				// DSH 只认 html[data-platform='darwin'] [data-window-drag] 这一条规则，
+				// 没标记的行拖不动窗口；标记后按钮会被宿主的全局规则自动减除，照常可点。
 				h(
 					"div",
-					{ style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 20px 10px", flexShrink: 0, borderBottom: "1px solid " + C.borderLight, background: C.main } },
+					{ "data-window-drag": true, style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 20px 10px", flexShrink: 0, borderBottom: "1px solid " + C.borderLight, background: C.main } },
 					h(
 						"div",
 						{ style: { display: "flex", alignItems: "center", gap: 6 } },
@@ -1728,7 +1769,9 @@ window.__ModuleLoader__.load({
 								"div",
 								{
 									id: "tw-new-menu",
-									style: { position: "absolute", right: 0, top: "calc(100% + 8px)", zIndex: 60, minWidth: 192, background: C.main, border: "1px solid " + C.border, borderRadius: 10, boxShadow: "0 10px 28px rgba(0,0,0,0.14)", padding: 6, display: "flex", flexDirection: "column", gap: 2 }
+									// WebkitAppRegion 内联声明 no-drag：下拉里的按钮虽已由宿主规则减除，
+									// 但菜单自身是 div，遮住的空白处仍会被当成窗口拖拽区。
+									style: { WebkitAppRegion: "no-drag", position: "absolute", right: 0, top: "calc(100% + 8px)", zIndex: 60, minWidth: 192, background: C.main, border: "1px solid " + C.border, borderRadius: 10, boxShadow: "0 10px 28px rgba(0,0,0,0.14)", padding: 6, display: "flex", flexDirection: "column", gap: 2 }
 								},
 								[["新建待办", "plus", "todo"], ["新建会议", "cal", "meeting"], ["新建笔记", "note", "note"]].map(([label, d, kind]) =>
 									h(
@@ -1774,7 +1817,7 @@ window.__ModuleLoader__.load({
 							"div",
 							{ style: { fontSize: 12.5, color: C.text1, marginTop: 5, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
 							h("span", null, "今天 " + todayMeets.length + " 场会议 · " + openN + " 项待办未完成"),
-							lateN ? h("span", { style: { color: C.danger, background: "rgba(255,59,48,0.08)", borderRadius: 5, padding: "1px 7px", fontSize: 11, fontWeight: 500 } }, lateN + " 项逾期") : null
+							lateN ? h("span", { style: { color: C.danger, background: tint(C.danger, 12), borderRadius: 5, padding: "1px 7px", fontSize: 11, fontWeight: 500 } }, lateN + " 项逾期") : null
 						)
 					)
 				),
@@ -1784,12 +1827,12 @@ window.__ModuleLoader__.load({
 					? null
 					: h(
 						"div",
-						{ style: { margin: "0 20px 10px", padding: "8px 12px", borderRadius: 8, background: "#fff5f3", border: "1px solid #ffddd6", color: "#b3271b", fontSize: 12, display: "flex", alignItems: "center", gap: 8, flexShrink: 0 } },
+						{ style: { margin: "0 20px 10px", padding: "8px 12px", borderRadius: 8, background: tint(C.danger, 10), border: "1px solid " + tint(C.danger, 26), color: C.danger, fontSize: 12, display: "flex", alignItems: "center", gap: 8, flexShrink: 0 } },
 						h("span", { style: { flex: 1, minWidth: 0 }, title: (err.todos || err.meetings || err.notes) || "" },
 							(err.todos ? "待办" : err.meetings ? "会议" : "笔记") + "数据加载失败，当前显示上一次成功的数据。"),
 						h(
 							"button",
-							{ onClick: reload, style: { border: "1px solid #ffc9be", background: "#fff", color: "#b3271b", fontSize: 12, fontWeight: 600, padding: "5px 12px", borderRadius: 6, cursor: "pointer", fontFamily: FONT, flexShrink: 0 } },
+							{ onClick: reload, style: { border: "1px solid " + tint(C.danger, 32) + "", background: C.main, color: C.danger, fontSize: 12, fontWeight: 600, padding: "5px 12px", borderRadius: 6, cursor: "pointer", fontFamily: FONT, flexShrink: 0 } },
 							"重试"
 						)
 					),
@@ -1869,7 +1912,7 @@ window.__ModuleLoader__.load({
 												},
 												h(
 														"div",
-														{ style: { width: 18, height: 18, boxSizing: "border-box", borderRadius: 5, border: "1.5px solid " + (t.done ? C.accent : "#c4cad4"), background: t.done ? C.accent : "transparent", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" } },
+														{ style: { width: 18, height: 18, boxSizing: "border-box", borderRadius: 5, border: "1.5px solid " + (t.done ? C.accent : C.text2), background: t.done ? C.accent : "transparent", display: "flex", alignItems: "center", justifyContent: "center", color: C.onAccent } },
 														t.done ? h(HIcon, { d: "check", size: 10 }) : null
 													)
 											),
@@ -2064,6 +2107,16 @@ window.__ModuleLoader__.load({
 				link.href = BRAND_ICON;
 				document.head.appendChild(link);
 			};
+			// 主题变量：强调色/状态色的深浅两套，一次性注入 head；DSH 路由切换会重建 head，
+			// 所以跟着下面的观察器一起补回（已有就跳过，避免自触发循环）。
+			const setTheme = () => {
+				if (document.getElementById("tidywork-theme")) return;
+				const st = document.createElement("style");
+				st.id = "tidywork-theme";
+				st.textContent = THEME_CSS;
+				document.head.appendChild(st);
+			};
+			setTheme();
 			setTitle();
 			setIcon();
 
@@ -2076,6 +2129,7 @@ window.__ModuleLoader__.load({
 				const raf = (fn) => setTimeout(fn, 0);
 				raf(() => {
 					scheduled = false;
+					setTheme();
 					setTitle();
 					setIcon();
 				});
@@ -2130,8 +2184,10 @@ window.__ModuleLoader__.load({
 					h(
 						"div",
 						{ style: { fontSize: 14, fontWeight: 600, whiteSpace: "nowrap", display: "flex", alignItems: "center" } },
-						h("span", { style: { color: "var(--ds-color-text-1, #1f2329)" } }, "Tidy"),
-						h("span", { style: { color: "#3370ff" } }, "Work")
+						// 用宿主的文字 token：之前写成不存在的 --ds-color-text-1，深色主题下
+						// 取兜底近黑，在深色侧栏上整段「Tidy」消失，只剩蓝色 Work 像残缺。
+						h("span", { style: { color: "var(--dsw-alias-label-primary, #1f2329)" } }, "Tidy"),
+						h("span", { style: { color: C.accent } }, "Work")
 					)
 				)
 			);
