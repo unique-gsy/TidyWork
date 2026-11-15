@@ -2,8 +2,12 @@
 // 职责：注册 /tidywork-api 前缀 HTTP 路由，提供工作区数据读写：
 //   - /tidywork-api/todos[/:id]          （待办：智能视图/分类筛选、增、改、删）
 //   - /tidywork-api/meetings[/:id]       （会议：按月筛选、增、删）
-//   - /tidywork-api/notes[/:id]          （笔记：列表/详情/增/改/删）
+//   - /tidywork-api/notes[/:id]          （笔记：列表（可按 q/tag 过滤）/详情/增/改/删/版本回滚）
+//   - /tidywork-api/attachments[/:file]  （笔记图片：base64 上传落盘 + 原样回读）
 // v3.7：删除 /tidywork-api/data?kind=board 通道（工作看板功能下线）。
+// v4.0：笔记升级为 Markdown 富文本——content 仍是纯文本，新增 format / tags / pinned / rev /
+//       versions；preview 与字数改按「去 Markdown 后的纯文本」算；PUT 支持 rev 冲突检测（409）；
+//       图片走 attachments 路由，正文只存 URL，notes.json 不被二进制撑大。
 // 数据以 JSON 文件落在 DSH profile 数据目录（$DSH_HOME/profiles/<profile>/tidywork/），
 // 跨容器重建与跨会话存活。首次无文件时写入示例数据。不触碰 DSH 任何原生功能。
 import { readFile, writeFile, mkdir, rename, unlink } from "node:fs/promises";
@@ -93,14 +97,15 @@ const SEEDS = {
   }
 };
 
-/** 读取请求体（JSON），带 1MB 上限。 */
-function readBody(req) {
+/** 读取请求体（JSON）；默认 1MB 上限，图片附件路由传更大的 limit。 */
+function readBody(req, limit) {
+  const max = limit || 1024 * 1024;
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
     req.on("data", (chunk) => {
       size += chunk.length;
-      if (size > 1024 * 1024) {
+      if (size > max) {
         reject(new Error("payload too large"));
         req.destroy();
         return;
@@ -179,6 +184,77 @@ async function saveStore(file, data) {
 
 function escStr(v, max) {
   return String(v == null ? "" : v).slice(0, max == null ? 40 : max);
+}
+
+/** 单篇笔记正文上限（Markdown 源码）、版本快照保留数、单张图片上限。 */
+const NOTE_MAX = 200 * 1024;
+const NOTE_VERSIONS = 20;
+const ATTACH_MAX = 6 * 1024 * 1024;
+
+/**
+ * 去 Markdown 标记后的纯文本：列表副标题、字数、搜索都用它，
+ * 否则侧栏会出现「## 会议纪要 - 参会…」这种源码标记。
+ */
+function mdPlain(src) {
+  return String(src == null ? "" : src)
+    .replace(/\r\n?/g, "\n")
+    .replace(/```[\w+#.-]*\n([\s\S]*?)```/g, "$1")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^ {0,3}#{1,6}\s+/gm, "")
+    .replace(/^ {0,3}> ?/gm, "")
+    .replace(/^\s*\|?[\s:|-]+\|?\s*$/gm, "")
+    .replace(/\|/g, " ")
+    .replace(/^\s*(?:[-*+]|\d+\.)\s+/gm, "")
+    .replace(/\[[ xX]\]\s*/g, "")
+    .replace(/[*_~]{1,3}/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** 列表副标题：纯文本截断（老数据里 preview 是源码硬截断，这里统一口径）。 */
+function mdPreview(src) {
+  const t = mdPlain(src);
+  return (t.slice(0, 40) + (t.length > 40 ? "…" : "")) || "新笔记";
+}
+
+/** 老数据补齐：format / tags / pinned / rev / versions / createdAt 缺省值。 */
+function normalizeNote(n) {
+  if (!n.format) n.format = "text";
+  if (!Array.isArray(n.tags)) n.tags = [];
+  n.pinned = Boolean(n.pinned);
+  if (!Number.isFinite(Number(n.rev))) n.rev = 0;
+  if (!Array.isArray(n.versions)) n.versions = [];
+  if (!n.createdAt) n.createdAt = n.updatedAt || localStamp();
+  return n;
+}
+
+/** 列表返回的精简形状：不带正文与版本，避免一次拉整个库。 */
+function noteSummary(n) {
+  return {
+    id: n.id,
+    title: n.title,
+    preview: n.preview,
+    updatedAt: n.updatedAt,
+    createdAt: n.createdAt,
+    tags: n.tags,
+    pinned: n.pinned,
+    format: n.format,
+    rev: n.rev
+  };
+}
+
+/** 标签规范化：中英文逗号都认，去空去重，最多 8 个、每个 12 字。 */
+function normTags(v) {
+  const list = Array.isArray(v) ? v : String(v == null ? "" : v).split(/[,，]/);
+  const out = [];
+  for (const raw of list) {
+    const t = String(raw == null ? "" : raw).replace(/\s+/g, " ").trim().slice(0, 12);
+    if (t && out.indexOf(t) < 0) out.push(t);
+    if (out.length >= 8) break;
+  }
+  return out;
 }
 
 /** 待办 GET 筛选：智能视图/分类/完成状态。 */
@@ -378,6 +454,65 @@ async function routeCore(req, res, url) {
     }
   }
 
+  // ---- 附件（笔记图片）/tidywork-api/attachments[/:file] ----
+  // 正文只存 URL（/tidywork-api/attachments/xxx.png），图片走这里，notes.json 不会被二进制撑大。
+  if (segs[0] === "tidywork-api" && segs[1] === "attachments") {
+    const dir = join(dataRoot(), "attachments");
+    if (segs.length === 2) {
+      if (req.method !== "POST") {
+        sendJson(res, 405, { ok: false, error: "method not allowed" });
+        return;
+      }
+      try {
+        const reqBody = JSON.parse(await readBody(req, ATTACH_MAX * 2));
+        const m = String(reqBody.dataUrl || "").match(/^data:(image\/(png|jpeg|jpg|webp|gif));base64,([A-Za-z0-9+/=]+)$/);
+        if (!m) {
+          sendJson(res, 400, { ok: false, error: "只支持 png / jpeg / webp / gif 图片" });
+          return;
+        }
+        const buf = Buffer.from(m[3], "base64");
+        if (buf.length > ATTACH_MAX) {
+          sendJson(res, 413, { ok: false, error: "单张图片不能超过 6MB" });
+          return;
+        }
+        const ext = m[1] === "image/jpeg" ? "jpg" : m[1].slice("image/".length);
+        const name = rid("a") + "." + ext;
+        await mkdir(dir, { recursive: true });
+        await writeFile(join(dir, name), buf);
+        sendJson(res, 200, { ok: true, data: { url: "/tidywork-api/attachments/" + name } });
+      } catch (error) {
+        serverError(res, error);
+      }
+      return;
+    }
+    if (segs.length === 3 && req.method === "GET") {
+      try {
+        if (!/^[A-Za-z0-9_-]+\.(png|jpg|jpeg|webp|gif)$/.test(segs[2])) {
+          sendJson(res, 400, { ok: false, error: "bad attachment name" });
+          return;
+        }
+        const buf = await readFile(join(dir, segs[2]));
+        const ext = segs[2].split(".").pop().toLowerCase();
+        const mime = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif" }[ext] || "application/octet-stream";
+        res.writeHead(200, {
+          "Content-Type": mime,
+          "Content-Length": buf.length,
+          "Cache-Control": "public, max-age=31536000, immutable"
+        });
+        res.end(buf);
+      } catch (error) {
+        if (error.code === "ENOENT") {
+          sendJson(res, 404, { ok: false, error: "附件不存在" });
+          return;
+        }
+        serverError(res, error);
+      }
+      return;
+    }
+    sendJson(res, 405, { ok: false, error: "method not allowed" });
+    return;
+  }
+
   // ---- 笔记 /tidywork-api/notes[/:id] ----
   if (segs[0] === "tidywork-api" && segs[1] === "notes") {
     const file = join(dataRoot(), "notes.json");
@@ -385,13 +520,14 @@ async function routeCore(req, res, url) {
       if (req.method === "GET") {
         try {
           const store = await readStore(file, "notes");
-          const items = (store.items || []).map((n) => ({
-            id: n.id,
-            title: n.title,
-            preview: n.preview,
-            updatedAt: n.updatedAt
-          }));
-          sendJson(res, 200, { ok: true, data: items });
+          const q = (url.searchParams.get("q") || "").trim().toLowerCase();
+          const tag = (url.searchParams.get("tag") || "").trim();
+          let items = (store.items || []).map(normalizeNote);
+          if (q) items = items.filter((n) => (n.title + "\n" + n.content).toLowerCase().includes(q));
+          if (tag) items = items.filter((n) => n.tags.indexOf(tag) >= 0);
+          // 置顶优先，其余按最后编辑倒序（列表首条即默认打开的那篇）。
+          items.sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+          sendJson(res, 200, { ok: true, data: items.map(noteSummary) });
         } catch (error) {
           serverError(res, error);
         }
@@ -401,15 +537,26 @@ async function routeCore(req, res, url) {
         try {
           const reqBody = JSON.parse(await readBody(req));
           const title = escStr(reqBody.title, 60).trim() || "未命名笔记";
-          const content = String(reqBody.content || "");
-          const store = await readStore(file, "notes");
+          const content = String(reqBody.content == null ? "" : reqBody.content);
+          if (content.length > NOTE_MAX) {
+            sendJson(res, 413, { ok: false, error: "单篇笔记正文不能超过 200KB" });
+            return;
+          }
+          const stamp = localStamp();
           const note = {
             id: rid("n"),
             title,
-            preview: (content.slice(0, 24) + (content.length > 24 ? "..." : "")) || "新笔记",
             content,
-            updatedAt: localStamp()
+            format: reqBody.format === "text" ? "text" : "markdown",
+            tags: normTags(reqBody.tags),
+            pinned: Boolean(reqBody.pinned),
+            preview: mdPreview(content),
+            rev: 1,
+            createdAt: stamp,
+            updatedAt: stamp,
+            versions: []
           };
+          const store = await readStore(file, "notes");
           store.items = store.items || [];
           store.items.push(note);
           await saveStore(file, store);
@@ -431,19 +578,52 @@ async function routeCore(req, res, url) {
           sendJson(res, 404, { ok: false, error: "笔记不存在" });
           return;
         }
+        normalizeNote(n);
         if (req.method === "GET") {
-          sendJson(res, 200, { ok: true, data: n });
+          const withVersions = url.searchParams.get("versions") === "1";
+          sendJson(res, 200, { ok: true, data: withVersions ? n : Object.assign({}, n, { versions: undefined }) });
           return;
         }
         if (req.method === "PUT") {
           const reqBody = JSON.parse(await readBody(req));
-          if ("title" in reqBody) n.title = escStr(reqBody.title, 60);
-          if ("content" in reqBody) {
-            const content = String(reqBody.content);
-            n.content = content;
-            n.preview = (content.slice(0, 24) + (content.length > 24 ? "..." : "")) || "新笔记";
+          // rev 冲突：客户端带着读到的版本号来写，说明它拿着一份旧内容（例如 AI 刚写过这篇）。
+          // 没带 rev 的调用（curl / Agent）保持原来的"整条覆盖"语义，不拦。
+          if ("rev" in reqBody && !reqBody.force && Number(reqBody.rev) !== Number(n.rev)) {
+            sendJson(res, 409, {
+              ok: false,
+              error: "该笔记已在别处更新",
+              data: { id: n.id, title: n.title, content: n.content, rev: n.rev, updatedAt: n.updatedAt }
+            });
+            return;
           }
+          const prev = { rev: n.rev, title: n.title, content: n.content, savedAt: n.updatedAt };
+          let changed = false;
+          if ("title" in reqBody) {
+            const t = escStr(reqBody.title, 60).trim() || "未命名笔记";
+            if (t !== n.title) { n.title = t; changed = true; }
+          }
+          if ("content" in reqBody) {
+            const content = String(reqBody.content == null ? "" : reqBody.content);
+            if (content.length > NOTE_MAX) {
+              sendJson(res, 413, { ok: false, error: "单篇笔记正文不能超过 200KB" });
+              return;
+            }
+            if (content !== n.content) {
+              n.content = content;
+              n.preview = mdPreview(content);
+              changed = true;
+            }
+          }
+          if ("format" in reqBody) n.format = reqBody.format === "text" ? "text" : "markdown";
+          if ("tags" in reqBody) n.tags = normTags(reqBody.tags);
+          if ("pinned" in reqBody) n.pinned = Boolean(reqBody.pinned);
+          // 内容真的变了才留快照，避免自动保存把版本历史刷成一片空白。
+          if (changed) {
+            n.versions = (n.versions || []).concat([prev]).slice(-NOTE_VERSIONS);
+          }
+          n.rev = Number(n.rev || 0) + 1;
           n.updatedAt = localStamp();
+          if (!n.createdAt) n.createdAt = n.updatedAt;
           await saveStore(file, store);
           sendJson(res, 200, { ok: true, data: n });
           return;
@@ -455,13 +635,47 @@ async function routeCore(req, res, url) {
           return;
         }
         sendJson(res, 405, { ok: false, error: "method not allowed" });
+        return;
+      } catch (error) {
+        serverError(res, error);
+      }
+      return;
+    }
+    // 版本回滚：POST /tidywork-api/notes/<id>/restore { rev }
+    if (segs.length === 4 && segs[3] === "restore") {
+      if (req.method !== "POST") {
+        sendJson(res, 405, { ok: false, error: "method not allowed" });
+        return;
+      }
+      try {
+        const id = segs[2];
+        const store = await readStore(file, "notes");
+        const n = (store.items || []).find((x) => x.id === id);
+        if (!n) {
+          sendJson(res, 404, { ok: false, error: "笔记不存在" });
+          return;
+        }
+        normalizeNote(n);
+        const reqBody = JSON.parse(await readBody(req));
+        const target = (n.versions || []).find((v) => Number(v.rev) === Number(reqBody.rev));
+        if (!target) {
+          sendJson(res, 404, { ok: false, error: "该版本不存在或已过期" });
+          return;
+        }
+        n.versions = (n.versions || []).concat([{ rev: n.rev, title: n.title, content: n.content, savedAt: n.updatedAt }]).slice(-NOTE_VERSIONS);
+        n.title = target.title;
+        n.content = target.content;
+        n.preview = mdPreview(target.content);
+        n.rev = Number(n.rev || 0) + 1;
+        n.updatedAt = localStamp();
+        await saveStore(file, store);
+        sendJson(res, 200, { ok: true, data: n });
       } catch (error) {
         serverError(res, error);
       }
       return;
     }
   }
-
   sendJson(res, 404, { ok: false, error: "not found" });
 }
 
@@ -547,12 +761,12 @@ const WORKSPACE_PROMPT = {
     "接口与字段：",
     "- 待办 POST /tidywork-api/todos — title 必填；priority 取 high | mid | low（默认 mid）；category 默认「工作」；due 取 today | tomorrow | week | YYYY-MM-DD | none。",
     "- 会议 POST /tidywork-api/meetings — title 与 date（YYYY-MM-DD）必填；time（HH:MM）、duration、location、participants 可选。",
-    "- 笔记 POST /tidywork-api/notes — content 必填（保留用户口述的原文），title 可选（不给就按内容概括一个短标题）。",
+    "- 笔记 POST /tidywork-api/notes — content 必填（保留用户口述的原文，可用 Markdown 组织：标题、列表、待办 - [ ]、表格、代码块），title 可选（不给就按内容概括一个短标题）；tags 可选（数组，最多 8 个）；format 默认 markdown。",
     '调用示例：curl -s -X POST "http://$(hostname -I | awk \'{print $1}\'):3080/tidywork-api/todos" -H "content-type: application/json" -d \'{"title":"周三前交季度复盘","due":"week"}\'',
     "如果当前会话里也存在 tidywork_add_todo / tidywork_add_meeting / tidywork_add_note 工具，优先用工具；工具不在可用列表时就按上面的 curl 方式写入。",
     "写完后用一句话告诉用户「已写入工作区」并复述关键字段，不要粘贴整段 JSON。",
     "用户没给的字段不要编造：缺标题就先问，缺时间就按当天最接近的整点提示确认；一次只补齐真正必要的信息。",
-    "修改已有条目可以直接做：先 GET 读出清单，确认用户指的是哪一条，再局部更新——待办 PATCH /tidywork-api/todos/<id>（可改 title / priority / category / due / done）；会议 PATCH /tidywork-api/meetings/<id>；笔记 PUT /tidywork-api/notes/<id>（整条覆盖，content 必填）。改完把改动复述一遍让用户确认。",
+    "修改已有条目可以直接做：先 GET 读出清单，确认用户指的是哪一条，再局部更新——待办 PATCH /tidywork-api/todos/<id>（可改 title / priority / category / due / done）；会议 PATCH /tidywork-api/meetings/<id>；笔记 PUT /tidywork-api/notes/<id>（content / title / tags / pinned / format 都可局部改，但要先 GET /tidywork-api/notes/<id> 拿到当前 rev 并原样回传 rev，否则会和用户在面板里的编辑撞车；返回 409 表示这篇已被别处改过，重新 GET 再决定合并方式）。改完把改动复述一遍让用户确认。",
     "删除必须先问清楚是哪一条、确认之后才删（DELETE 同一个路径）。不要自己判断「这条应该没用了」就删。",
     "与工作项无关的话题按平常方式回答，不必主动提起本工作区。",
   ].join("\n"),
@@ -602,12 +816,20 @@ async function addNote(args) {
   const title = escStr(args.title, 60).trim() || "未命名笔记";
   const content = String(args.content == null ? "" : args.content);
   if (!content.trim() && title === "未命名笔记") return { ok: false, error: "标题与正文至少要有一个" };
+  const stamp = localStamp();
   const item = {
     id: rid("n"),
     title,
-    preview: (content.slice(0, 24) + (content.length > 24 ? "..." : "")) || "新笔记",
     content,
-    updatedAt: localStamp()
+    // Agent 写进来的正文按 Markdown 存：模型本来就爱用列表/标题组织文字，读态直接渲染。
+    format: "markdown",
+    tags: normTags(args.tags),
+    pinned: false,
+    preview: mdPreview(content),
+    rev: 1,
+    createdAt: stamp,
+    updatedAt: stamp,
+    versions: []
   };
   return withQueue("notes", async () => {
     const store = await readStore(file, "notes");
@@ -623,12 +845,13 @@ async function addNote(args) {
 const NOTE_ADD_TOOL = {
   name: "tidywork_add_note",
   description:
-    "在 TidyWork 笔记中新增一条笔记。参数：title 笔记标题（简短概括，必填或可由正文概括）；content 笔记正文（用户口述的内容原文，尽量保留原话）。",
+    "在 TidyWork 笔记中新增一条笔记。参数：title 笔记标题（简短概括）；content 笔记正文（用户口述原文为主，可用 Markdown 组织：标题、列表、待办 - [ ]、表格、代码块）；tags 标签数组（可选，最多 8 个）。",
   parameters: {
     type: "object",
     properties: {
       title: { type: "string", description: "笔记标题" },
-      content: { type: "string", description: "笔记正文" }
+      content: { type: "string", description: "笔记正文（Markdown，尽量保留用户原话）" },
+      tags: { type: "array", items: { type: "string" }, description: "标签，最多 8 个" }
     },
     required: ["content"]
   },

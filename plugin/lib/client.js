@@ -26,6 +26,16 @@
 //      （近期/今天/逾期/本周/全部 五个视图，勾选即时回写 PATCH）；
 //      右栏 本周进度环 + 最近笔记 + 2×2 快捷操作；底部 本周节奏（7 天点阵）。
 //      窄屏（窗口 <860px）自动切单列。
+// v4.0 变更（笔记富文本）：
+//   9) 笔记正文改为 Markdown 真源：新笔记 format="markdown"，老笔记 format="text" 继续按纯文本渲染，
+//      不迁移数据。读态用插件内置的极简 GFM 渲染（标题/列表/表格/代码块/粗斜体/删除线/引用/
+//      任务清单/图片/链接），写态仍是 textarea + 工具栏（插件保持零依赖直发，不引第三方编辑器）。
+//  10) 编辑体验：编辑 / 分屏 / 预览三态、工具栏一键插入（标题/粗体/列表/待办/代码/表格/链接/图片）、
+//      Cmd+B/I/S/E、Tab 缩进、粘贴或拖入图片自动上传并插入。
+//  11) 保存与协同：900ms 防抖自动保存、localStorage 草稿恢复、rev 冲突提示（AI 写入同一篇时会提示
+//      「加载最新 / 覆盖保存」，不再静默覆盖）。
+//  12) 组织能力：标签、置顶、搜索、大纲跳转、版本历史（最多 20 个快照并可回滚）、
+//      勾选清单一键转待办、笔记内链 todo:/meeting: 点击跳对应面板。
 window.__ModuleLoader__.load({
 	id: "@tidywork/dsh-plugin",
 	factory: (require) => {
@@ -33,7 +43,7 @@ window.__ModuleLoader__.load({
 		var exports = module.exports;
 		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 		let react = require("react");
-		let { useEffect, useState, useCallback } = react;
+		let { useEffect, useState, useCallback, useRef, useMemo } = react;
 
 		// ===== 常量：工作台色板（跟随 DSH 宿主主题）=====
 		// DSH 用 body[data-ds-dark-theme] 切换深浅，并把所有颜色发布成 --dsw-alias-* 设计 token。
@@ -299,15 +309,20 @@ window.__ModuleLoader__.load({
 			}
 		}
 
-		/** 调用 /tidywork-api 路由（path 已含 /tidywork-api 前缀）：ok 时 resolve(data)，失败 reject(error)。 */
+		/** 调用 /tidywork-api 路由（path 已含 /tidywork-api 前缀）：ok 时 resolve(data)，失败 reject(error)。
+		 *  失败时 error 上带 status / payload —— 笔记的 409 冲突要靠它区分"被别处改过"和普通失败。 */
 		function api(path, opts) {
 			const init = Object.assign({ headers: { "Content-Type": "application/json" } }, opts || {});
 			return fetch(path, init)
-				.then((r) => r.json())
-				.then((j) => {
-					if (j && j.ok) return j.data;
-					throw new Error((j && j.error) || "请求失败");
-				});
+				.then((r) =>
+					r.json().then((j) => {
+						if (j && j.ok) return j.data;
+						const err = new Error((j && j.error) || "请求失败");
+						err.status = r.status;
+						err.payload = j && j.data;
+						throw err;
+					})
+				);
 		}
 		let __toastTimer = null;
 		/** toast(msg, opts?)：opts.action 显示可点击动作（如"撤销"），点击触发 onAction 后立即隐藏。 */
@@ -1249,116 +1264,1170 @@ window.__ModuleLoader__.load({
 			);
 		}
 
-		// ===== 笔记（复刻 8080：双栏 + 新建/保存/删除 + 字数/最后编辑） =====
-		function NotesPage() {
+		// ===== 笔记：Markdown 富文本（v4.0）=====
+		// 之前正文是一段裸 textarea，列表里的"预览"是对源码前 24 个字符硬截断。现在：
+		//   1) content 仍是纯文本，但新笔记按 Markdown 存（format="markdown"），老笔记 format="text" 仍按纯文本渲染；
+		//   2) 读态用插件自带的 Markdown 渲染（标题/列表/表格/代码/粗斜体/链接/图片/任务清单/引用），
+		//      写态是 textarea + 工具栏 —— 不引第三方编辑器，插件继续保持零依赖直发；
+		//   3) 自动保存（900ms 防抖）+ localStorage 草稿 + rev 冲突提示（AI 刚写过同一篇时不会再被静默覆盖）；
+		//   4) 标签、置顶、搜索、大纲、版本历史、图片粘贴上传、勾选清单转待办、笔记内链到待办/会议。
+		const DRAFT_PREFIX = "tidywork.draft.";
+		const MD_CSS = [
+			".tw-md{font-size:14px;line-height:1.78;color:var(--dsw-alias-label-primary,#1f2329);word-break:break-word;overflow-wrap:anywhere}",
+			".tw-md h1,.tw-md h2,.tw-md h3,.tw-md h4,.tw-md h5,.tw-md h6{margin:20px 0 10px;font-weight:600;line-height:1.35;color:var(--dsw-alias-label-primary,#1f2329)}",
+			".tw-md h1{font-size:24px}.tw-md h2{font-size:20px}.tw-md h3{font-size:17px}.tw-md h4,.tw-md h5,.tw-md h6{font-size:15px}",
+			".tw-md p{margin:10px 0}",
+			".tw-md a{color:var(--tw-accent,#3370ff);text-decoration:none}.tw-md a:hover{text-decoration:underline}",
+			".tw-md code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;background:color-mix(in srgb,var(--dsw-alias-label-primary,#1f2329) 7%,transparent);padding:2px 5px;border-radius:4px}",
+			".tw-md pre{position:relative;background:color-mix(in srgb,var(--dsw-alias-label-primary,#1f2329) 6%,transparent);border:1px solid var(--dsw-alias-border-l1,#f0f0f0);border-radius:8px;padding:12px 14px;margin:12px 0;overflow:auto}",
+			".tw-md pre code{background:none;padding:0;font-size:12.5px;line-height:1.6;white-space:pre}",
+			".tw-md .tw-copy{position:absolute;top:8px;right:8px;font-size:11px;padding:2px 8px;border-radius:4px;border:1px solid var(--dsw-alias-border-l2,#e5e6eb);background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-secondary,#646a73);cursor:pointer;opacity:0;transition:opacity .15s;font-family:inherit}",
+			".tw-md pre:hover .tw-copy{opacity:1}",
+			".tw-md table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13px}",
+			".tw-md th,.tw-md td{border:1px solid var(--dsw-alias-border-l2,#e5e6eb);padding:6px 10px;text-align:left;vertical-align:top}",
+			".tw-md th{background:color-mix(in srgb,var(--dsw-alias-label-primary,#1f2329) 6%,transparent);font-weight:600}",
+			".tw-md blockquote{margin:12px 0;padding:2px 0 2px 12px;border-left:3px solid var(--dsw-alias-border-l2,#e5e6eb);color:var(--dsw-alias-label-secondary,#646a73)}",
+			".tw-md ul,.tw-md ol{margin:8px 0;padding-left:22px}",
+			".tw-md li{margin:3px 0}",
+			".tw-md li.tw-task{list-style:none;margin-left:-22px;display:flex;gap:8px;align-items:flex-start}",
+			".tw-md .tw-check{width:15px;height:15px;flex:0 0 auto;margin-top:4px;border:1px solid var(--dsw-alias-border-l2,#e5e6eb);border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;line-height:1;color:transparent;cursor:pointer;background:transparent}",
+			'.tw-md .tw-check[data-check="1"]{background:var(--tw-accent,#3370ff);border-color:var(--tw-accent,#3370ff);color:#fff}',
+			".tw-md img{max-width:100%;border-radius:8px;margin:10px 0;display:block}",
+			".tw-md hr{border:none;border-top:1px solid var(--dsw-alias-border-l1,#f0f0f0);margin:18px 0}",
+			".tw-plain{white-space:pre-wrap;font-size:14px;line-height:1.78;word-break:break-word}",
+			".tw-tool{display:inline-flex;align-items:center;padding:4px 9px;border-radius:6px;border:1px solid transparent;background:transparent;color:var(--dsw-alias-label-secondary,#646a73);font-size:12.5px;cursor:pointer;font-family:inherit;line-height:1.5}",
+			".tw-tool:hover{background:color-mix(in srgb,var(--dsw-alias-label-primary,#1f2329) 6%,transparent);color:var(--dsw-alias-label-primary,#1f2329)}",
+			".tw-live-b{cursor:text;border-radius:6px}",
+			".tw-live-b:hover{background:color-mix(in srgb,var(--dsw-alias-label-primary,#1f2329) 4%,transparent)}",
+			".tw-live-empty{color:var(--dsw-alias-label-tertiary,#8f959e);font-size:13px;padding:20px 0;cursor:text}",
+			".tw-live .tw-live-ta::placeholder{color:var(--dsw-alias-label-tertiary,#8f959e)}",
+			".tw-live .tw-live-ta{font-size:14px}"
+		].join("");
+
+		/** Markdown 渲染样式一次性注入 head；DSH 重建 head 后由 applyBranding 的观察器补回。 */
+		function ensureMdCss() {
+			if (document.getElementById("tidywork-md-css")) return;
+			const st = document.createElement("style");
+			st.id = "tidywork-md-css";
+			st.textContent = MD_CSS;
+			document.head.appendChild(st);
+		}
+
+		function mdEscape(s) {
+			return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+		}
+
+		/** 链接白名单：内链 todo:/meeting:、站内相对路径、http(s)、mailto；其余（javascript/data 等）不渲染。 */
+		function mdUrl(u) {
+			const s = String(u || "").trim();
+			if (!s) return "";
+			if (/^(todo|meeting):/i.test(s)) return s;
+			if (s.startsWith("/")) return s;
+			if (/^(https?:|mailto:)/i.test(s)) return s;
+			return "";
+		}
+
+		function mdImgUrl(u) {
+			const s = String(u || "").trim();
+			if (s.startsWith("/") && !s.startsWith("//")) return location.origin + s;
+			if (/^https?:/i.test(s)) return s;
+			return "";
+		}
+
+		/** 行内语法：代码 > 图片 > 链接 > 强调。代码先占位，避免后续替换破坏已生成的标签。 */
+		function mdInline(raw) {
+			const slots = [];
+			let s = String(raw == null ? "" : raw);
+			s = s.replace(/`([^`]+)`/g, (m, code) => {
+				slots.push("<code>" + mdEscape(code) + "</code>");
+				return "\u0000" + (slots.length - 1) + "\u0001";
+			});
+			s = mdEscape(s);
+			s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)[^)]*\)/g, (m, alt, url) => {
+				const src = mdImgUrl(url.replace(/&amp;/g, "&"));
+				if (!src) return "";
+				return '<img src="' + mdEscape(src) + '" alt="' + alt + '" loading="lazy" />';
+			});
+			s = s.replace(/\[([^\]]*)\]\(([^)\s]+)[^)]*\)/g, (m, text, url) => {
+				const u = url.replace(/&amp;/g, "&");
+				if (/^(todo|meeting):/i.test(u)) {
+					const kind = u.split(":")[0].toLowerCase();
+					return '<a href="#" data-tw-link="1" data-kind="' + kind + '" data-id="' + mdEscape(u.slice(kind.length + 1)) + '">' + text + "</a>";
+				}
+				const safe = mdUrl(u);
+				if (!safe) return text;
+				return '<a href="' + mdEscape(safe) + '" target="_blank" rel="noopener noreferrer">' + text + "</a>";
+			});
+			s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+			s = s.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+			s = s.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+			s = s.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+			return s.replace(/\u0000(\d+)\u0001/g, (m, i) => slots[Number(i)] || "");
+		}
+
+		const MD_LIST = /^\s*(?:[-*+]|\d+\.)\s+/;
+		const MD_BLOCK = /^ {0,3}(?:#{1,6}\s|>|```)/;
+
+		/** 极简 GFM 渲染（纯字符串输出，全部文本已转义，不走 innerHTML 注入）。plain=true 时按纯文本展现。
+		 *  opt.baseLine  —— 这段内容在原文档里的起始行号（任务清单的 data-line 要用全局行号）
+		 *  opt.hnStart   —— 这段内容之前的标题数（标题 id/data-h 用全文序号，大纲才找得到）
+		 *  opt.idPrefix  —— 标题 id 前缀（分块渲染时每块各用各的，避免 id 重复 */
+		function mdToHtml(md, plain, opt) {
+			const o = opt || {};
+			const base = o.baseLine || 0;
+			const pre = o.idPrefix || "tw-h-";
+			const src = String(md == null ? "" : md).replace(/\r\n?/g, "\n");
+			if (plain) return '<div class="tw-plain">' + mdEscape(src).replace(/\n/g, "<br />") + "</div>";
+			const lines = src.split("\n");
+			const out = [];
+			let i = 0;
+			let hn = o.hnStart || 0;
+			while (i < lines.length) {
+				const line = lines[i];
+				if (!line.trim()) { i += 1; continue; }
+				const fence = line.match(/^ {0,3}```\s*([\w+#.-]*)\s*$/);
+				if (fence) {
+					const lang = fence[1] || "";
+					const buf = [];
+					i += 1;
+					while (i < lines.length && !/^ {0,3}```/.test(lines[i])) buf.push(lines[i++]);
+					i += 1;
+					out.push("<pre><code" + (lang ? ' data-lang="' + mdEscape(lang) + '"' : "") + ">" + mdEscape(buf.join("\n")) + '</code><button class="tw-copy" type="button">复制</button></pre>');
+					continue;
+				}
+				const head = line.match(/^ {0,3}(#{1,6})\s+(.*)$/);
+				if (head) {
+					const lv = head[1].length;
+					hn += 1;
+					out.push("<h" + lv + ' id="' + pre + hn + '" data-h="' + hn + '">' + mdInline(head[2].replace(/\s+#+\s*$/, "")) + "</h" + lv + ">");
+					i += 1;
+					continue;
+				}
+				if (/^ {0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) { out.push("<hr />"); i += 1; continue; }
+				if (/^ {0,3}>/.test(line)) {
+					const buf = [];
+					while (i < lines.length && /^ {0,3}>/.test(lines[i])) buf.push(lines[i++].replace(/^ {0,3}> ?/, ""));
+					out.push("<blockquote>" + mdToHtml(buf.join("\n"), false) + "</blockquote>");
+					continue;
+				}
+				if (/^\s*\|/.test(line) && i + 1 < lines.length && /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i + 1]) && lines[i + 1].indexOf("-") >= 0) {
+					const split = (l) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+					const headCells = split(lines[i]);
+					const aligns = split(lines[i + 1]).map((c) => (c.startsWith(":") && c.endsWith(":") ? "center" : c.endsWith(":") ? "right" : c.startsWith(":") ? "left" : ""));
+					i += 2;
+					const rows = [];
+					while (i < lines.length && /^\s*\|/.test(lines[i])) rows.push(split(lines[i++]));
+					let t = "<table><thead><tr>";
+					headCells.forEach((c, k) => { t += "<th" + (aligns[k] ? ' style="text-align:' + aligns[k] + '"' : "") + ">" + mdInline(c) + "</th>"; });
+					t += "</tr></thead><tbody>";
+					rows.forEach((r) => {
+						t += "<tr>";
+						headCells.forEach((c, k) => { t += "<td>" + mdInline(r[k] == null ? "" : r[k]) + "</td>"; });
+						t += "</tr>";
+					});
+					out.push(t + "</tbody></table>");
+					continue;
+				}
+				if (MD_LIST.test(line)) {
+					const items = [];
+					while (i < lines.length && MD_LIST.test(lines[i])) {
+						const m = lines[i].match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
+						items.push({ indent: m[1].replace(/\t/g, "  ").length, ordered: /\d+\./.test(m[2]), text: m[3], line: i });
+						i += 1;
+					}
+					let html = "";
+					const stack = [];
+					for (const it of items) {
+						let depth = it.indent >= 4 ? 2 : it.indent >= 2 ? 1 : 0;
+						depth += 1;
+						if (depth > stack.length + 1) depth = stack.length + 1;
+						while (stack.length && (stack.length > depth || (stack.length === depth && stack[stack.length - 1].ordered !== it.ordered))) {
+							html += stack.pop().ordered ? "</ol>" : "</ul>";
+						}
+						if (stack.length < depth) {
+							html += it.ordered ? "<ol>" : "<ul>";
+							stack.push({ ordered: it.ordered });
+						}
+						const task = it.text.match(/^\[([ xX])\]\s+(.*)$/);
+						if (task) {
+							const on = task[1].toLowerCase() === "x";
+							html += '<li class="tw-task"><span class="tw-check" data-check="' + (on ? 1 : 0) + '" data-line="' + (it.line + base) + '" role="checkbox" aria-checked="' + (on ? "true" : "false") + '">✓</span><span>' + mdInline(task[2]) + "</span></li>";
+						} else {
+							html += "<li>" + mdInline(it.text) + "</li>";
+						}
+					}
+					while (stack.length) html += stack.pop().ordered ? "</ol>" : "</ul>";
+					out.push(html);
+					continue;
+				}
+				const buf = [];
+				while (i < lines.length && lines[i].trim() && !MD_BLOCK.test(lines[i]) && !MD_LIST.test(lines[i]) && !/^\s*\|/.test(lines[i]) && !/^ {0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/.test(lines[i])) {
+					buf.push(lines[i++]);
+				}
+				if (!buf.length) buf.push(lines[i++]);
+				out.push("<p>" + mdInline(buf.join("\n")).replace(/\n/g, "<br />") + "</p>");
+			}
+			return out.join("\n");
+		}
+
+		const MD_IS_FENCE = (l) => /^ {0,3}(?:```|~~~)/.test(l);
+		const MD_IS_HEAD = (l) => /^ {0,3}#{1,6}\s/.test(l);
+		const MD_IS_QUOTE = (l) => /^ {0,3}>/.test(l);
+		const MD_IS_LI = (l) => /^\s*(?:[-*+]|\d+\.)\s+/.test(l);
+		const MD_IS_TABLE = (l) => /^\s*\|/.test(l);
+		const MD_IS_HR = (l) => /^ {0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/.test(l);
+
+		/** 把 Markdown 源码切成"块"（即时渲染按块编辑的最小单位）。
+		 *  返回 [{start,end,hn}]：start/end 为源码行号（含），hn 为块之前的标题数。 */
+		function mdBlocks(src) {
+			const lines = String(src == null ? "" : src).split("\n");
+			const out = [];
+			let hn = 0;
+			let i = 0;
+			while (i < lines.length) {
+				const l = lines[i];
+				if (!l.trim()) { i += 1; continue; }
+				if (MD_IS_FENCE(l)) {
+					let j = i + 1;
+					while (j < lines.length && !MD_IS_FENCE(lines[j])) j += 1;
+					const end = j < lines.length ? j : lines.length - 1;
+					out.push({ start: i, end, hn });
+					i = end + 1;
+					continue;
+				}
+				if (MD_IS_TABLE(l) && i + 1 < lines.length && /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i + 1]) && lines[i + 1].indexOf("-") >= 0) {
+					let j = i + 2;
+					while (j < lines.length && MD_IS_TABLE(lines[j]) && lines[j].trim()) j += 1;
+					out.push({ start: i, end: j - 1, hn });
+					i = j;
+					continue;
+				}
+				if (MD_IS_HEAD(l)) { out.push({ start: i, end: i, hn }); hn += 1; i += 1; continue; }
+				if (MD_IS_HR(l)) { out.push({ start: i, end: i, hn }); i += 1; continue; }
+				if (MD_IS_QUOTE(l)) {
+					let j = i + 1;
+					while (j < lines.length && MD_IS_QUOTE(lines[j])) j += 1;
+					out.push({ start: i, end: j - 1, hn });
+					i = j;
+					continue;
+				}
+				if (MD_IS_LI(l)) {
+					let j = i + 1;
+					while (j < lines.length && (MD_IS_LI(lines[j]) || (/^\s{2,}/.test(lines[j]) && lines[j].trim()))) j += 1;
+					out.push({ start: i, end: j - 1, hn });
+					i = j;
+					continue;
+				}
+				let j = i + 1;
+				while (j < lines.length && lines[j].trim() && !MD_IS_FENCE(lines[j]) && !MD_IS_HEAD(lines[j]) && !MD_IS_QUOTE(lines[j]) && !MD_IS_LI(lines[j]) && !MD_IS_TABLE(lines[j]) && !MD_IS_HR(lines[j])) j += 1;
+				out.push({ start: i, end: j - 1, hn });
+				i = j;
+			}
+			return out;
+		}
+
+		/** 渲染后的可见字符位置 → 源码位置：跳过 #、-、*、`、|、链接括号等标记字符。 */
+		function mdRawOffset(raw, vis) {
+			const s = String(raw == null ? "" : raw);
+			let ri = 0;
+			let vi = 0;
+			const lineStart = () => ri === 0 || s.charAt(ri - 1) === "\n";
+			while (ri < s.length && vi < vis) {
+				const rest = s.slice(ri);
+				if (lineStart()) {
+					const m = rest.match(/^(?:#{1,6}\s+|> |- \[[ xX]\] |[-*+]\s+|\d+\.\s+|```[\w+#.-]*\s*\n)/);
+					if (m) { ri += m[0].length; continue; }
+				}
+				if (rest.charAt(0) === "|") { ri += 1; continue; }
+				if (rest.startsWith("**") || rest.startsWith("__") || rest.startsWith("~~")) { ri += 2; continue; }
+				if (rest.charAt(0) === "*" || rest.charAt(0) === "_" || rest.charAt(0) === "`") { ri += 1; continue; }
+				if (rest.startsWith("](")) {
+					const m2 = rest.match(/^\]\([^)]*\)/);
+					if (m2) { ri += m2[0].length; continue; }
+				}
+				if (rest.startsWith("![")) { ri += 2; continue; }
+				if (rest.charAt(0) === "[") { ri += 1; continue; }
+				if (rest.charAt(0) === "\n") { ri += 1; continue; }
+				ri += 1;
+				vi += 1;
+			}
+			return ri;
+		}
+
+		/** 去 Markdown 标记（与 server 的 mdPlain 同口径），用于实时字数统计。 */
+		function mdPlainClient(src) {
+			return String(src == null ? "" : src)
+				.replace(/```[\w+#.-]*\n([\s\S]*?)```/g, "$1")
+				.replace(/`([^`]*)`/g, "$1")
+				.replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+				.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+				.replace(/^ {0,3}#{1,6}\s+/gm, "")
+				.replace(/^ {0,3}> ?/gm, "")
+				.replace(/^\s*\|?[\s:|-]+\|?\s*$/gm, "")
+				.replace(/\|/g, " ")
+				.replace(/^\s*(?:[-*+]|\d+\.)\s+/gm, "")
+				.replace(/\[[ xX]\]\s*/g, "")
+				.replace(/[*_~]{1,3}/g, "")
+				.replace(/\s+/g, " ")
+				.trim();
+		}
+
+		/** 光标处插入：有选区就用 before/after 包裹，否则插入 ph 占位并选中它。 */
+		function mdApply(value, start, end, before, after, ph) {
+			const sel = value.slice(start, end);
+			const body = sel || ph || "";
+			const next = value.slice(0, start) + before + body + after + value.slice(end);
+			const s = start + before.length;
+			return { next, start: s, end: s + body.length };
+		}
+
+		/** 给选区覆盖的每一行加/去前缀（标题 / 列表 / 引用 / 待办共用）。 */
+		function mdPrefix(value, start, end, prefix) {
+			const ls = value.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
+			let le = value.indexOf("\n", end);
+			if (le < 0) le = value.length;
+			const lines = value.slice(ls, le).split("\n");
+			const strip = (l) => l.replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+(?:\[[ xX]\]\s+)?|\d+\.\s+)/, "");
+			const all = lines.every((l) => l.startsWith(prefix) || !l.trim());
+			const nextLines = lines.map((l) => (all ? l.slice(prefix.length) : prefix + strip(l)));
+			const block = nextLines.join("\n");
+			return { next: value.slice(0, ls) + block + value.slice(le), start: ls, end: ls + block.length };
+		}
+
+		/** 毫秒时间戳 → 本地 ISO（YYYY-MM-DDTHH:MM），喂给现有的 relTime。 */
+		function stampOf(ts) {
+			const d = new Date(Number(ts) || Date.now());
+			const p = (n) => String(n).padStart(2, "0");
+			return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + "T" + p(d.getHours()) + ":" + p(d.getMinutes());
+		}
+
+		function splitTags(v) {
+			return String(v == null ? "" : v).split(/[,，]/).map((s) => s.trim()).filter(Boolean).slice(0, 8);
+		}
+
+		function NotesPage(props) {
 			const [notes, setNotes] = useState([]);
 			const [current, setCurrent] = useState(null);
 			const [title, setTitle] = useState("");
 			const [content, setContent] = useState("");
-			const [meta, setMeta] = useState("选择左侧笔记，或新建一篇");
+			const [format, setFormat] = useState("markdown");
+			const [tagsText, setTagsText] = useState("");
+			const [pinned, setPinned] = useState(false);
+			const [rev, setRev] = useState(0);
+			const [mode, setMode] = useState("live");
+			const [blocks, setBlocks] = useState([]);
+			const [act, setAct] = useState(null);
+			const [query, setQuery] = useState("");
+			const [dirty, setDirty] = useState(false);
+			const [saving, setSaving] = useState(false);
+			const [conflict, setConflict] = useState(null);
+			const [draft, setDraft] = useState(null);
+			const [histOpen, setHistOpen] = useState(false);
+			const [versions, setVersions] = useState([]);
+			const [linkOpen, setLinkOpen] = useState(false);
+			const [linkItems, setLinkItems] = useState({ todos: [], meetings: [] });
 
-			const loadOne = useCallback((id) => {
+			const taRef = useRef(null);
+			const previewRef = useRef(null);
+			const fileRef = useRef(null);
+			const caretRef = useRef(null);
+			const actRef = useRef(null);
+			const liveCaretRef = useRef(null);
+			const live = useRef({});
+			live.current = { current, title, content, format, tagsText, pinned, rev, dirty };
+
+			const plainLen = mdPlainClient(content).replace(/\s+/g, "").length;
+			const headings = useMemo(() => {
+				const out = [];
+				String(content).split("\n").forEach((l, idx) => {
+					const m = l.match(/^ {0,3}(#{1,6})\s+(.*)$/);
+					if (m) out.push({ level: m[1].length, text: m[2].replace(/[*_`~]/g, "").trim(), idx, ord: out.length + 1 });
+				});
+				return out;
+			}, [content]);
+			const outlineVisible = headings.length >= 2 && mode !== "edit";
+
+			useEffect(() => { ensureMdCss(); }, []);
+
+			/** 即时渲染：只在"没有正在编辑的块"时按源码重算分块，打字期间保持结构稳定。 */
+			useEffect(() => {
+				if (mode !== "live" || act) return;
+				setBlocks(mdBlocks(content));
+			}, [content, mode, act]);
+
+			/** 块被激活后：聚焦、还原光标、按内容撑高。 */
+			useEffect(() => {
+				if (!act || !actRef.current) return;
+				const ta = actRef.current;
+				if (document.activeElement !== ta) ta.focus();
+				const c = liveCaretRef.current;
+				if (c && c.off != null) {
+					const off = Math.min(c.off, ta.value.length);
+					ta.selectionStart = off;
+					ta.selectionEnd = off;
+					liveCaretRef.current = null;
+				}
+				ta.style.height = "auto";
+				ta.style.height = ta.scrollHeight + "px";
+				if (typeof ta.scrollIntoView === "function") {
+					const box = previewRef.current;
+					const top = ta.getBoundingClientRect().top;
+					const bTop = box ? box.getBoundingClientRect().top : 0;
+					const bBottom = box ? box.getBoundingClientRect().bottom : 0;
+					if (top < bTop + 24 || top > bBottom - 60) ta.scrollIntoView({ block: "center" });
+				}
+			}, [act]);
+
+			const srcLines = () => String(live.current.content).split("\n");
+			const offAt = (ls, lineIdx, ch) => {
+				let n = 0;
+				for (let k = 0; k < lineIdx && k < ls.length; k += 1) n += ls[k].length + 1;
+				return n + (ch || 0);
+			};
+			const adjustTa = (ta) => {
+				if (!ta) return;
+				ta.style.height = "auto";
+				ta.style.height = ta.scrollHeight + "px";
+			};
+
+			/** 用 newLines 替换源码里正在编辑的那几行；caretOff 为块内字符偏移（null 表示保留 DOM 选区）。 */
+			const liveReplace = (newLines, actStart, caretOff) => {
+				if (!act) return;
+				const start = actStart == null ? act.start : actStart;
+				const end = act.end;
+				const lines = srcLines();
+				const delta = newLines.length - (end - start + 1);
+				setContent(lines.slice(0, start).concat(newLines, lines.slice(end + 1)).join("\n"));
+				setDirty(true);
+				if (delta) setBlocks((bs) => bs.map((b) => (b.start > end ? { start: b.start + delta, end: b.end + delta, hn: b.hn } : b)));
+				if (caretOff != null) liveCaretRef.current = { off: caretOff };
+				setAct({ start, end: start + newLines.length - 1 });
+			};
+
+			const onLiveInput = (value) => {
+				if (!act) return;
+				liveReplace(value.split("\n"), act.start, null);
+			};
+
+			const liveWrap = (before, after, ph) => {
+				const ta = actRef.current;
+				if (!ta || !act) return;
+				const res = mdApply(ta.value, ta.selectionStart, ta.selectionEnd, before, after, ph);
+				ta.value = res.next;
+				ta.selectionStart = res.start;
+				ta.selectionEnd = res.end;
+				adjustTa(ta);
+				liveReplace(res.next.split("\n"), act.start, null);
+			};
+
+			/** 回车：段落/标题类块提交后开一行新的空行；列表项续写新项；代码块与表格保持原生换行。 */
+			const liveEnter = (ta) => {
+				if (!act) return false;
+				const raw = ta.value;
+				const headLine = String(raw.split("\n")[0] || "");
+				if (MD_IS_FENCE(headLine) || MD_IS_TABLE(headLine)) return false;
+				const pos = ta.selectionStart == null ? raw.length : ta.selectionStart;
+				const leftLines = raw.slice(0, pos).split("\n");
+				const right = raw.slice(pos);
+				const curLine = leftLines[leftLines.length - 1];
+				let newLines = leftLines.concat([""], right === "" ? [] : right.split("\n"));
+				let caretLine = act.start + leftLines.length;
+				let caretCh = 0;
+				const liM = curLine.match(/^(\s*)([-*+]|\d+\.)\s+(\[[ xX]\]\s+)?/);
+				if (liM && right.trim() === "") {
+					const marker = /\d/.test(liM[2]) ? String(Number(liM[2].replace(/\./, "")) + 1) + "." : liM[2];
+					const text = liM[1] + marker + " " + (liM[3] ? "[ ] " : "");
+					newLines = leftLines.concat([text]);
+					caretLine = act.start + leftLines.length;
+					caretCh = text.length;
+				}
+				const lines = srcLines();
+				const nextSrc = lines.slice(0, act.start).concat(newLines, lines.slice(act.end + 1)).join("\n");
+				const nextBlocks = mdBlocks(nextSrc);
+				const cover = nextBlocks.filter((b) => b.start <= caretLine && caretLine <= b.end)[0];
+				setContent(nextSrc);
+				setDirty(true);
+				setBlocks(nextBlocks);
+				if (cover) {
+					const bLines = nextSrc.split("\n").slice(cover.start, cover.end + 1);
+					setAct({ start: cover.start, end: cover.end });
+					liveCaretRef.current = { off: offAt(bLines, caretLine - cover.start, caretCh) };
+				} else {
+					setAct({ start: caretLine, end: caretLine });
+					liveCaretRef.current = { off: caretCh };
+				}
+				return true;
+			};
+
+			const onLiveKey = (e) => {
+				const meta = e.metaKey || e.ctrlKey;
+				const ta = e.target;
+				if (meta && (e.key === "b" || e.key === "B")) { e.preventDefault(); liveWrap("**", "**", "加粗文字"); return; }
+				if (meta && (e.key === "i" || e.key === "I")) { e.preventDefault(); liveWrap("*", "*", "斜体文字"); return; }
+				if (meta && (e.key === "s" || e.key === "S")) { e.preventDefault(); saveNow(false); return; }
+				if (meta && (e.key === "e" || e.key === "E")) { e.preventDefault(); setAct(null); setMode("preview"); return; }
+				if (e.key === "Escape") { e.preventDefault(); setAct(null); return; }
+				if (e.key === "Tab") {
+					e.preventDefault();
+					const r = mdApply(ta.value, ta.selectionStart, ta.selectionEnd, "  ", "", "");
+					ta.value = r.next;
+					ta.selectionStart = r.end;
+					ta.selectionEnd = r.end;
+					adjustTa(ta);
+					liveReplace(r.next.split("\n"), act ? act.start : null, null);
+					return;
+				}
+				if (e.key === "Enter" && !e.shiftKey && liveEnter(ta)) e.preventDefault();
+			};
+
+			const activateBlock = (b, vis) => {
+				const raw = srcLines().slice(b.start, b.end + 1).join("\n");
+				liveCaretRef.current = { off: vis == null ? raw.length : mdRawOffset(raw, vis) };
+				setAct({ start: b.start, end: b.end });
+			};
+
+			const onLiveClick = (e) => {
+				const t = e.target;
+				if (!t || !t.closest) return;
+				const a = t.closest("a[data-tw-link]");
+				if (a) {
+					e.preventDefault();
+					const kind = a.getAttribute("data-kind");
+					if (props.openPanel) props.openPanel(kind === "meeting" ? "tidywork-meetings" : "tidywork-todos");
+					return;
+				}
+				const chk = t.closest(".tw-check");
+				if (chk) { toggleTask(Number(chk.getAttribute("data-line"))); return; }
+				const copy = t.closest(".tw-copy");
+				if (copy) {
+					const code = copy.parentNode && copy.parentNode.querySelector("code");
+					if (code && navigator.clipboard) navigator.clipboard.writeText(code.textContent || "").then(() => toast("代码已复制")).catch(() => {});
+					return;
+				}
+				const blk = t.closest("[data-b]");
+				if (!blk) return;
+				const start = Number(blk.getAttribute("data-b"));
+				const b = blocks.filter((x) => x.start === start)[0];
+				if (!b) return;
+				let vis = null;
+				try {
+					const r = document.caretRangeFromPoint ? document.caretRangeFromPoint(e.clientX, e.clientY) : null;
+					if (r && blk.contains(r.startContainer)) {
+						const rr = document.createRange();
+						rr.selectNodeContents(blk);
+						rr.setEnd(r.startContainer, r.startOffset);
+						vis = rr.toString().length;
+					}
+				} catch (err) {}
+				activateBlock(b, vis);
+			};
+
+			/** 光标/选区操作统一走这里：改内容 + 记光标，渲染完再还原选区。 */
+			const applyEdit = (res) => {
+				caretRef.current = { start: res.start, end: res.end };
+				setContent(res.next);
+				setDirty(true);
+			};
+			const selRange = () => {
+				const ta = taRef.current;
+				const len = live.current.content.length;
+				if (!ta) return { start: len, end: len };
+				return { start: ta.selectionStart == null ? len : ta.selectionStart, end: ta.selectionEnd == null ? len : ta.selectionEnd };
+			};
+			const insertText = (before, after, ph) => {
+				const r = selRange();
+				applyEdit(mdApply(live.current.content, r.start, r.end, before, after, ph));
+			};
+			const wrapSelection = (before, after, ph) => insertText(before, after, ph);
+			const applyPrefix = (prefix) => {
+				const r = selRange();
+				applyEdit(mdPrefix(live.current.content, r.start, r.end, prefix));
+			};
+
+			useEffect(() => {
+				const c = caretRef.current;
+				if (!c || !taRef.current) return;
+				caretRef.current = null;
+				const ta = taRef.current;
+				ta.focus();
+				ta.selectionStart = c.start;
+				ta.selectionEnd = c.end;
+			}, [content]);
+
+			const readDraft = (key) => {
+				try { const raw = localStorage.getItem(DRAFT_PREFIX + key); return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
+			};
+			const clearDraft = (key) => {
+				try { localStorage.removeItem(DRAFT_PREFIX + key); } catch (e) {}
+			};
+
+			const refreshList = (q) => {
+				api("/tidywork-api/notes" + (q ? "?q=" + encodeURIComponent(q) : ""))
+					.then((list) => setNotes(list || []))
+					.catch(() => {});
+			};
+
+			const loadNote = (id) => {
 				api("/tidywork-api/notes/" + id)
 					.then((n) => {
 						setCurrent(n);
 						setTitle(n.title || "");
 						setContent(n.content || "");
-						setMeta("最后编辑：" + relTime(n.updatedAt || "—") + " · " + (n.content ? n.content.length : 0) + " 字");
+						setFormat(n.format === "text" ? "text" : "markdown");
+						setTagsText((n.tags || []).join(", "));
+						setPinned(Boolean(n.pinned));
+						setRev(n.rev || 0);
+						setDirty(false);
+						setConflict(null);
+						setAct(null);
+						setBlocks(mdBlocks(n.content || ""));
+						const d = readDraft(n.id);
+						const base = new Date(String(n.updatedAt || "").replace(" ", "T")).getTime();
+						if (d && d.ts && Number(d.ts) > (Number.isFinite(base) ? base : 0) && (d.content || "") !== (n.content || "")) setDraft(d);
+						else setDraft(null);
 					})
-					.catch(() => {});
-			}, []);
-			const openAdd = useCallback(() => {
+					.catch(() => toast("笔记加载失败"));
+			};
+
+			const openAdd = () => {
+				if (dirty) saveNow(false);
+				setAct(null);
+				setBlocks([]);
 				setCurrent(null);
 				setTitle("");
 				setContent("");
-				setMeta("新笔记 · 输入内容后保存");
-			}, []);
-			const loadAll = useCallback(() => {
+				setFormat("markdown");
+				setTagsText("");
+				setPinned(false);
+				setRev(0);
+				setDirty(false);
+				setConflict(null);
+				setMode("live");
+				const d = readDraft("new");
+				if (d && (d.content || "").trim()) setDraft(d);
+				else setDraft(null);
+			};
+
+			const selectNote = (id) => {
+				if (current && current.id === id) return;
+				if (dirty) saveNow(false);
+				loadNote(id);
+			};
+
+			useEffect(() => {
 				api("/tidywork-api/notes")
 					.then((list) => {
 						setNotes(list || []);
-						if (list && list.length > 0) loadOne(list[0].id);
+						if (list && list.length) loadNote(list[0].id);
 						else openAdd();
 					})
 					.catch(() => {});
-			}, [loadOne, openAdd]);
-			useEffect(() => {
-				loadAll();
-			}, [loadAll]);
+			}, []);
 
-			const save = () => {
-				const t = title.trim() || "未命名笔记";
-				if (current) {
-					api("/tidywork-api/notes/" + current.id, { method: "PUT", body: JSON.stringify({ title: t, content }) })
-						.then(() => {
-							toast("笔记已保存");
-							loadAll();
-						})
-						.catch((e) => toast(e.message));
-				} else {
-					api("/tidywork-api/notes", { method: "POST", body: JSON.stringify({ title: t, content }) })
-						.then(() => {
-							toast("笔记已创建");
-							loadAll();
-						})
-						.catch((e) => toast(e.message));
+			useEffect(() => {
+				const timer = setTimeout(() => refreshList(query), 300);
+				return () => clearTimeout(timer);
+			}, [query]);
+
+			/** 自动保存：内容一停 900ms 就落盘，同时把草稿写进 localStorage 兜住异常关闭。 */
+			useEffect(() => {
+				if (!dirty || conflict) return;
+				if (!String(content || "").trim() && !String(title || "").trim()) return;
+				const key = current ? current.id : "new";
+				try {
+					localStorage.setItem(DRAFT_PREFIX + key, JSON.stringify({ title, content, format, tagsText, pinned, ts: Date.now() }));
+				} catch (e) {}
+				const timer = setTimeout(() => saveNow(false), 900);
+				return () => clearTimeout(timer);
+			}, [title, content, format, tagsText, pinned, dirty, conflict]);
+
+			const saveNow = (force) => {
+				const l = live.current;
+				const c = l.current;
+				if (!c && !String(l.content || "").trim() && !String(l.title || "").trim()) return Promise.resolve(null);
+				setSaving(true);
+				const body = {
+					title: (l.title || "").trim() || "未命名笔记",
+					content: l.content,
+					format: l.format,
+					tags: splitTags(l.tagsText),
+					pinned: Boolean(l.pinned)
+				};
+				if (c) {
+					body.rev = l.rev;
+					if (force) body.force = true;
 				}
+				const req = c
+					? api("/tidywork-api/notes/" + c.id, { method: "PUT", body: JSON.stringify(body) })
+					: api("/tidywork-api/notes", { method: "POST", body: JSON.stringify(body) });
+				return req
+					.then((n) => {
+						setSaving(false);
+						// 保存期间用户可能已经切到别的笔记：只在"还停在这一篇"时才回写状态，
+						// 否则刚加载的那篇会被上一笔保存的响应覆盖。
+						const still = live.current.current;
+						if (!still || still.id === n.id) {
+							setDirty(false);
+							setConflict(null);
+							setCurrent(n);
+							setRev(n.rev || 0);
+						}
+						clearDraft(n.id);
+						clearDraft("new");
+						refreshList(query);
+						return n;
+					})
+					.catch((e) => {
+						setSaving(false);
+						if (e && e.status === 409) {
+							setConflict(e.payload || {});
+							return null;
+						}
+						toast("保存失败：" + e.message);
+						return null;
+					});
 			};
+
 			const remove = () => {
-				if (!current) {
-					toast("请先选择笔记");
-					return;
-				}
+				if (!current) { toast("请先选择笔记"); return; }
 				if (!confirm("确认删除该笔记？")) return;
-				api("/tidywork-api/notes/" + current.id, { method: "DELETE" })
+				const id = current.id;
+				api("/tidywork-api/notes/" + id, { method: "DELETE" })
 					.then(() => {
+						clearDraft(id);
+						setDirty(false);
 						setCurrent(null);
 						toast("笔记已删除");
-						loadAll();
+						api("/tidywork-api/notes").then((list) => {
+							setNotes(list || []);
+							if (list && list.length) loadNote(list[0].id);
+							else openAdd();
+						}).catch(() => {});
 					})
 					.catch((e) => toast(e.message));
 			};
 
-			return h(
-				"div",
-				{ style: { flex: 1, display: "grid", gridTemplateColumns: "220px minmax(0, 1fr)", height: "100%", overflow: "hidden", background: C.page, color: C.text0, fontFamily: FONT, fontSize: 14, boxSizing: "border-box" } },
+			const uploadImage = (file) => {
+				if (!file) return;
+				if (!/^image\//.test(file.type)) { toast("只支持图片文件"); return; }
+				if (file.size > 6 * 1024 * 1024) { toast("单张图片不能超过 6MB"); return; }
+				const liveTa = actRef.current;
+				const liveSel = liveTa ? { start: liveTa.selectionStart || 0, end: liveTa.selectionEnd || 0 } : null;
+				const liveAct = act;
+				const r = selRange();
+				const reader = new FileReader();
+				reader.onload = () => {
+					api("/tidywork-api/attachments", { method: "POST", body: JSON.stringify({ name: file.name || "image", dataUrl: String(reader.result) }) })
+						.then((res) => {
+							const alt = String(file.name || "图片").replace(/[\[\]]/g, "");
+							const snippet = "![" + alt + "](" + res.url + ")\n";
+							if (liveAct && liveTa && liveSel) {
+								const out = mdApply(liveTa.value, liveSel.start, liveSel.end, snippet, "", "");
+								liveTa.value = out.next;
+								liveTa.selectionStart = out.end;
+								liveTa.selectionEnd = out.end;
+								adjustTa(liveTa);
+								liveReplace(out.next.split("\n"), liveAct.start, null);
+							} else {
+								applyEdit(mdApply(live.current.content, r.start, r.end, snippet, "", ""));
+							}
+							toast("图片已插入");
+						})
+						.catch((e) => toast("图片上传失败：" + e.message));
+				};
+				reader.readAsDataURL(file);
+			};
+
+			const onPaste = (e) => {
+				const files = e.clipboardData && e.clipboardData.files;
+				if (files && files.length && /^image\//.test(files[0].type)) {
+					e.preventDefault();
+					uploadImage(files[0]);
+				}
+			};
+			const onDrop = (e) => {
+				const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+				if (f && /^image\//.test(f.type)) {
+					e.preventDefault();
+					uploadImage(f);
+				}
+			};
+
+			const onKeyDown = (e) => {
+				const meta = e.metaKey || e.ctrlKey;
+				if (meta && (e.key === "b" || e.key === "B")) { e.preventDefault(); wrapSelection("**", "**", "加粗文字"); return; }
+				if (meta && (e.key === "i" || e.key === "I")) { e.preventDefault(); wrapSelection("*", "*", "斜体文字"); return; }
+				if (meta && (e.key === "s" || e.key === "S")) { e.preventDefault(); saveNow(false); return; }
+				if (meta && (e.key === "e" || e.key === "E")) { e.preventDefault(); setMode(mode === "preview" ? "edit" : "preview"); return; }
+				if (e.key === "Tab") { e.preventDefault(); insertText("  ", "", ""); }
+			};
+
+			const toggleTask = (line) => {
+				const lines = String(live.current.content).split("\n");
+				if (line < 0 || line >= lines.length) return;
+				if (!/\[[ xX]\]/.test(lines[line])) return;
+				lines[line] = lines[line].replace(/\[([ xX])\]/i, (m, s) => (s.trim() ? "[ ]" : "[x]"));
+				setContent(lines.join("\n"));
+				setDirty(true);
+			};
+
+			const onPreviewClick = (e) => {
+				const t = e.target;
+				if (!t || !t.closest) return;
+				const a = t.closest("a[data-tw-link]");
+				if (a) {
+					e.preventDefault();
+					const kind = a.getAttribute("data-kind");
+					if (props.openPanel) props.openPanel(kind === "meeting" ? "tidywork-meetings" : "tidywork-todos");
+					return;
+				}
+				const chk = t.closest(".tw-check");
+				if (chk) { toggleTask(Number(chk.getAttribute("data-line"))); return; }
+				const copy = t.closest(".tw-copy");
+				if (copy) {
+					const code = copy.parentNode && copy.parentNode.querySelector("code");
+					if (code && navigator.clipboard) {
+						navigator.clipboard.writeText(code.textContent || "").then(() => toast("代码已复制")).catch(() => {});
+					}
+				}
+			};
+
+			const jumpHeading = (hd) => {
+				if (mode === "live") {
+					setAct(null);
+					requestAnimationFrame(() => {
+						const root = previewRef.current;
+						const el = root && root.querySelector('[data-h="' + hd.ord + '"]');
+						if (el && el.scrollIntoView) el.scrollIntoView({ block: "start", behavior: "smooth" });
+					});
+					return;
+				}
+				if (mode === "edit") {
+					const ta = taRef.current;
+					if (!ta) return;
+					const lines = String(live.current.content).split("\n");
+					let off = 0;
+					for (let k = 0; k < hd.idx; k += 1) off += lines[k].length + 1;
+					caretRef.current = null;
+					ta.focus();
+					ta.selectionStart = off;
+					ta.selectionEnd = off;
+					ta.scrollTop = Math.max(0, hd.idx * 25 - 24);
+					return;
+				}
+				const root = previewRef.current;
+				if (!root) return;
+				const hs = root.querySelectorAll("h1,h2,h3,h4,h5,h6");
+				const el = hs[hd.ord - 1];
+				if (el && el.scrollIntoView) el.scrollIntoView({ block: "start", behavior: "smooth" });
+			};
+
+			const tasksToTodos = () => {
+				const lines = String(live.current.content).split("\n");
+				const picked = [];
+				lines.forEach((l, i) => {
+					const m = l.match(/^\s*[-*+]\s+\[( ?)\]\s+(.*)$/);
+					if (m && (!m[1] || m[1] === " ")) picked.push({ line: i, text: m[2].trim() });
+				});
+				if (!picked.length) { toast("正文里没有未勾选的待办项（- [ ]）"); return; }
+				Promise.all(picked.map((p) => api("/tidywork-api/todos", { method: "POST", body: JSON.stringify({ title: p.text.slice(0, 60), due: "today" }) }).catch(() => null)))
+					.then((rs) => {
+						const ok = rs.filter(Boolean).length;
+						const hit = new Set(picked.map((p) => p.line));
+						const next = lines.map((l, i) => (hit.has(i) ? l.replace(/\[( ?)\]/, "[x]") : l)).join("\n");
+						setContent(next);
+						setDirty(true);
+						toast(ok ? "已创建 " + ok + " 条待办" : "待办创建失败");
+					});
+			};
+
+			const openHistory = () => {
+				if (!current) { toast("请先选择笔记"); return; }
+				api("/tidywork-api/notes/" + current.id + "?versions=1")
+					.then((n) => { setVersions((n && n.versions) || []); setHistOpen(true); })
+					.catch((e) => toast(e.message));
+			};
+
+			const restoreVersion = (v) => {
+				if (!current || !v) return;
+				api("/tidywork-api/notes/" + current.id + "/restore", { method: "POST", body: JSON.stringify({ rev: v.rev }) })
+					.then(() => { setHistOpen(false); loadNote(current.id); toast("已恢复到该版本"); })
+					.catch((e) => toast(e.message));
+			};
+
+			const openLinkPicker = () => {
+				setLinkOpen(true);
+				api("/tidywork-api/todos?view=all").then((d) => setLinkItems((x) => ({ todos: (d || []).slice(0, 12), meetings: x.meetings }))).catch(() => {});
+				api("/tidywork-api/meetings").then((d) => setLinkItems((x) => ({ todos: x.todos, meetings: (d || []).slice(0, 12) }))).catch(() => {});
+			};
+
+			const insertInternalLink = (kind, item) => {
+				insertText("[" + String(item.title || "").replace(/[\[\]]/g, "") + "](" + kind + ":" + item.id + ")", "", "");
+				setLinkOpen(false);
+				toast("已插入内链");
+			};
+
+			const statusText = saving ? "保存中…" : conflict ? "有冲突" : dirty ? "未保存" : "已保存";
+			const statusColor = conflict ? C.danger : dirty || saving ? C.warning : C.text2;
+			const metaLine = "最后编辑：" + (current ? relTime(current.updatedAt || "—") : "—") + " · " + plainLen + " 字";
+
+			const banner = (bg, color, text, actions) =>
 				h(
 					"div",
-					{ style: { borderRight: "1px solid " + C.borderLight, overflowY: "auto", padding: 10, boxSizing: "border-box" } },
-					h(
-						"button",
-						{ style: Object.assign({}, S.menuItem, { color: C.accent, fontWeight: 600 }), onClick: openAdd },
-						h("svg", { style: Object.assign({}, S.menuIcon, { width: 16, height: 16, color: C.accent }), viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" }, h("path", { d: TODO_ICONS.plus })),
-						h("span", null, "新建笔记")
-					),
-					notes.length === 0
-						? h("div", { style: { padding: 8, fontSize: 12, color: C.text2 } }, "暂无笔记")
-						: notes.map((n) =>
+					{ style: { display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", marginBottom: 8, borderRadius: 8, background: bg, color, fontSize: 12 } },
+					h("span", { style: { flex: 1, minWidth: 0 } }, text),
+					actions
+				);
+
+			const toolbar = h(
+				"div",
+				{ style: { display: "flex", flexWrap: "wrap", gap: 2, padding: "6px 0 8px", borderBottom: "1px solid " + C.borderLight } },
+				(mode === "preview" || mode === "live" ? [] : [
+					{ label: "标题", run: () => applyPrefix("## ") },
+					{ label: "粗体", run: () => wrapSelection("**", "**", "加粗文字") },
+					{ label: "斜体", run: () => wrapSelection("*", "*", "斜体文字") },
+					{ label: "删除线", run: () => wrapSelection("~~", "~~", "文字") },
+					{ label: "引用", run: () => applyPrefix("> ") },
+					{ label: "列表", run: () => applyPrefix("- ") },
+					{ label: "待办", run: () => applyPrefix("- [ ] ") },
+					{ label: "行内代码", run: () => wrapSelection("`", "`", "code") },
+					{ label: "代码块", run: () => insertText("\n```\n", "\n```\n", "") },
+					{ label: "表格", run: () => insertText("\n| 列 1 | 列 2 |\n| --- | --- |\n| 内容 | 内容 |\n", "", "") },
+					{ label: "链接", run: () => insertText("[", "](https://)", "链接文字") },
+					{ label: "内链", run: openLinkPicker },
+					{ label: "图片", run: () => fileRef.current && fileRef.current.click() }
+				]).map((it) => h("button", { key: it.label, className: "tw-tool", onClick: it.run, type: "button" }, it.label)),
+				h("div", { style: { flex: 1 } }),
+				[
+					{ id: "live", label: "即时" },
+					{ id: "edit", label: "编辑" },
+					{ id: "split", label: "分屏" },
+					{ id: "preview", label: "预览" }
+				].map((it) =>
+					h("button", { key: it.id, className: "tw-tool", onClick: () => setMode(it.id), type: "button", style: mode === it.id ? { background: C.accentSoft, color: C.accent, fontWeight: 600 } : null }, it.label)
+				)
+			);
+
+			const textarea = h("textarea", {
+				ref: taRef,
+				value: content,
+				spellCheck: false,
+				placeholder: "在这里输入笔记内容…支持 Markdown：# 标题、- 列表、- [ ] 待办、| 表格 |、``` 代码块 ```、![图片](url)",
+				onChange: (e) => { setContent(e.target.value); setDirty(true); },
+				onPaste,
+				onDrop,
+				onKeyDown,
+				style: { flex: 1, minWidth: 0, width: "100%", height: "100%", border: "none", outline: "none", resize: "none", background: "transparent", font: "inherit", lineHeight: 1.8, color: C.text1, fontFamily: FONT, boxSizing: "border-box", padding: "10px 0" }
+			});
+
+			const preview = h("div", {
+				ref: previewRef,
+				className: "tw-md",
+				onClick: onPreviewClick,
+				style: { flex: 1, minWidth: 0, overflowY: "auto", padding: "6px 0 24px", boxSizing: "border-box" },
+				dangerouslySetInnerHTML: { __html: mdToHtml(content, format === "text") }
+			});
+
+			/** 正在编辑的那一块：等高 textarea，和渲染块共用字体与行高，视觉上不跳。 */
+			const liveEditorNode = () => {
+				const val = act ? srcLines().slice(act.start, act.end + 1).join("\n") : "";
+				return h("textarea", {
+					key: "e" + (act ? act.start + "-" + act.end : "none"),
+					ref: actRef,
+					defaultValue: val,
+					className: "tw-live-ta",
+					spellCheck: false,
+					placeholder: "开始写…",
+					onInput: (ev) => { adjustTa(ev.target); onLiveInput(ev.target.value); },
+					onKeyDown: onLiveKey,
+					onBlur: () => setAct(null),
+					onPaste,
+					onDrop,
+					style: { display: "block", width: "100%", border: "none", outline: "none", resize: "none", background: "transparent", color: C.text1, fontFamily: FONT, boxSizing: "border-box", overflow: "hidden", padding: "2px 0", margin: 0, minHeight: 26, lineHeight: 1.78 }
+				});
+			};
+
+			const liveNodes = [];
+			let livePlaced = false;
+			if (mode === "live") {
+				blocks.forEach((b) => {
+					if (act && !livePlaced && act.start < b.start) {
+						liveNodes.push(liveEditorNode());
+						livePlaced = true;
+					}
+					if (act && act.start === b.start) {
+						liveNodes.push(liveEditorNode());
+						livePlaced = true;
+						return;
+					}
+					const raw = srcLines().slice(b.start, b.end + 1).join("\n");
+					liveNodes.push(
+						h("div", {
+							key: "b" + b.start,
+							"data-b": b.start,
+							className: "tw-live-b",
+							dangerouslySetInnerHTML: { __html: mdToHtml(raw, format === "text", { baseLine: b.start, idPrefix: "hb" + b.start + "-", hnStart: b.hn }) }
+						})
+					);
+				});
+				if (act && !livePlaced) liveNodes.push(liveEditorNode());
+				if (!blocks.length && !act) liveNodes.push(h("div", { className: "tw-live-empty", onClick: () => setAct({ start: 0, end: 0 }) }, "点这里开始写…"));
+			}
+			const livePane = h(
+				"div",
+				{ ref: previewRef, className: "tw-md tw-live", onClick: onLiveClick, style: { flex: 1, minWidth: 0, overflowY: "auto", padding: "6px 0 48px", boxSizing: "border-box" } },
+				liveNodes
+			);
+
+			const sidebar = h(
+				"div",
+				{ style: { borderRight: "1px solid " + C.borderLight, overflowY: "auto", padding: 10, boxSizing: "border-box" } },
+				h("input", { style: Object.assign({}, S.input, { fontSize: 12.5, padding: "7px 9px", marginBottom: 8 }), placeholder: "搜索标题或正文…", value: query, onChange: (e) => setQuery(e.target.value) }),
+				h(
+					"button",
+					{ style: Object.assign({}, S.menuItem, { color: C.accent, fontWeight: 600 }), onClick: openAdd },
+					h("svg", { style: Object.assign({}, S.menuIcon, { width: 16, height: 16, color: C.accent }), viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" }, h("path", { d: TODO_ICONS.plus })),
+					h("span", null, "新建笔记")
+				),
+				notes.length === 0
+					? h("div", { style: { padding: 8, fontSize: 12, color: C.text2 } }, query ? "没有匹配的笔记" : "暂无笔记")
+					: h(
+							"div",
+							{ style: { display: "flex", flexDirection: "column", gap: 2 } },
+							notes.map((n) =>
 								h(
 									"div",
-									{ key: n.id, style: { padding: 10, borderRadius: 8, cursor: "pointer", marginBottom: 2, background: current && current.id === n.id ? C.active : "transparent" }, onClick: () => loadOne(n.id) },
-									h("div", { style: { fontSize: 13, fontWeight: 500, marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, n.title),
-									h("div", { style: { fontSize: 11, color: C.text2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, n.preview)
+									{ key: n.id, style: { padding: "9px 10px", borderRadius: 8, cursor: "pointer", background: current && current.id === n.id ? C.active : "transparent" }, onClick: () => selectNote(n.id) },
+									h(
+										"div",
+										{ style: { display: "flex", alignItems: "center", gap: 4, marginBottom: 3 } },
+										n.pinned ? h("span", { style: { fontSize: 11, color: C.accent, flexShrink: 0 } }, "★") : null,
+										h("div", { style: { flex: 1, minWidth: 0, fontSize: 13, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, n.title),
+										n.format === "markdown" ? h("span", { style: { fontSize: 10, color: C.text2, flexShrink: 0, letterSpacing: 0.5 } }, "MD") : null
+									),
+									h("div", { style: { fontSize: 11, color: C.text2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, n.preview || ""),
+									(n.tags || []).length
+										? h("div", { style: { display: "flex", gap: 4, marginTop: 4, flexWrap: "wrap" } }, n.tags.map((tg) => h("span", { key: tg, style: { fontSize: 10, padding: "1px 6px", borderRadius: 4, background: C.accentSoft, color: C.accent } }, tg)))
+										: null
 								)
 							)
+						)
+			);
+
+			const main = h(
+				"div",
+				{ style: { display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" } },
+				h(
+					"div",
+					{ style: { padding: "18px 24px 0", flexShrink: 0 } },
+					h(
+						"div",
+						{ style: { display: "flex", alignItems: "flex-start", gap: 6 } },
+						h("input", { style: { flex: 1, minWidth: 0, background: "none", border: "none", outline: "none", fontSize: 22, fontWeight: 700, color: C.text0, marginBottom: 6, fontFamily: FONT }, placeholder: "笔记标题", value: title, onChange: (e) => { setTitle(e.target.value); setDirty(true); } }),
+						h("button", { type: "button", title: pinned ? "取消置顶" : "置顶", onClick: () => { setPinned(!pinned); setDirty(true); }, style: { border: "none", background: "transparent", cursor: "pointer", fontSize: 18, lineHeight: "28px", color: pinned ? C.accent : C.text2, padding: "0 4px" } }, pinned ? "★" : "☆")
+					),
+					h(
+						"div",
+						{ style: { fontSize: 12, color: C.text2, display: "flex", gap: 10, alignItems: "center", paddingBottom: 8, borderBottom: "1px solid " + C.borderLight } },
+						h("span", null, metaLine),
+						h("span", { style: { color: statusColor } }, statusText),
+						h("button", { type: "button", onClick: () => { const next = format === "markdown" ? "text" : "markdown"; setFormat(next); setDirty(true); }, style: { fontSize: 11, padding: "1px 7px", borderRadius: 4, border: "1px solid " + C.border, background: C.main, color: C.text1, cursor: "pointer", fontFamily: FONT } }, format === "markdown" ? "Markdown" : "纯文本")
+					),
+					h("input", { style: { width: "100%", background: "none", border: "none", outline: "none", fontSize: 12, color: C.text1, padding: "7px 0", fontFamily: FONT, boxSizing: "border-box" }, placeholder: "标签，用逗号分隔（最多 8 个）", value: tagsText, onChange: (e) => { setTagsText(e.target.value); setDirty(true); } }),
+					conflict
+						? banner(tint(C.warning, 12), C.warning, "这篇笔记在别处被更新了（可能是 AI 写入），当前编辑基于旧版本。", [
+								h("button", { key: "reload", type: "button", onClick: () => loadNote(current.id), style: { border: "none", background: "transparent", color: C.accent, cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: FONT } }, "加载最新"),
+								h("button", { key: "force", type: "button", onClick: () => saveNow(true), style: { border: "none", background: "transparent", color: C.text1, cursor: "pointer", fontSize: 12, fontFamily: FONT } }, "覆盖保存")
+							])
+						: null,
+					draft
+						? banner(tint(C.accent, 10), C.accent, "检测到本地未保存草稿（" + relTime(stampOf(draft.ts)) + "）。", [
+								h("button", { key: "use", type: "button", onClick: () => { setTitle(draft.title || ""); setContent(draft.content || ""); setTagsText(draft.tagsText || ""); setFormat(draft.format || "markdown"); setDirty(true); setDraft(null); }, style: { border: "none", background: "transparent", color: C.accent, cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: FONT } }, "恢复草稿"),
+								h("button", { key: "drop", type: "button", onClick: () => { clearDraft(current ? current.id : "new"); setDraft(null); }, style: { border: "none", background: "transparent", color: C.text2, cursor: "pointer", fontSize: 12, fontFamily: FONT } }, "丢弃")
+							])
+						: null,
+					toolbar
 				),
 				h(
 					"div",
-					{ style: { padding: "24px 32px", overflowY: "auto", minWidth: 0, display: "flex", flexDirection: "column", boxSizing: "border-box" } },
-					h("input", { style: { width: "100%", background: "none", border: "none", outline: "none", fontSize: 22, fontWeight: 700, color: C.text0, marginBottom: 8, fontFamily: FONT }, placeholder: "笔记标题", value: title, onChange: (e) => setTitle(e.target.value) }),
-					h("div", { style: { fontSize: 12, color: C.text2, marginBottom: 24, paddingBottom: 16, borderBottom: "1px solid " + C.borderLight } }, meta),
-					h(
-						"div",
-						{ style: { flex: 1, minHeight: 240 } },
-						h("textarea", { style: { width: "100%", height: "100%", minHeight: 240, border: "none", outline: "none", resize: "none", background: "transparent", font: "inherit", lineHeight: 1.8, color: C.text1, fontFamily: FONT, boxSizing: "border-box" }, placeholder: "在这里输入笔记内容…", value: content, onChange: (e) => setContent(e.target.value) })
-					),
-					h(
-						"div",
-						{ style: { display: "flex", gap: 8, justifyContent: "flex-end", padding: "12px 0" } },
-						h(Btn, { onClick: remove }, "删除"),
-						h(Btn, { primary: true, onClick: save }, "保存")
-					)
+					{ style: { flex: 1, minHeight: 0, display: "flex", gap: 16, overflow: "hidden", padding: "0 24px" } },
+					mode === "edit" ? textarea : null,
+					mode === "split" ? h("div", { style: { flex: 1, minWidth: 0, display: "flex", borderRight: "1px solid " + C.borderLight, paddingRight: 12 } }, textarea) : null,
+					mode === "live" ? livePane : mode === "edit" ? null : preview
+				),
+				h(
+					"div",
+					{ style: { display: "flex", gap: 8, alignItems: "center", padding: "10px 24px 14px", flexShrink: 0 } },
+					h(Btn, { onClick: remove }, "删除"),
+					h(Btn, { onClick: tasksToTodos }, "勾选项转待办"),
+					h(Btn, { onClick: openHistory }, "历史"),
+					h("div", { style: { flex: 1 } }),
+					h("input", { ref: fileRef, type: "file", accept: "image/*", style: { display: "none" }, onChange: (e) => { const f = e.target.files && e.target.files[0]; if (f) uploadImage(f); e.target.value = ""; } }),
+					h(Btn, { primary: true, onClick: () => saveNow(false) }, "保存")
 				)
+			);
+
+			const outline = outlineVisible
+				? h(
+						"div",
+						{ style: { borderLeft: "1px solid " + C.borderLight, padding: "18px 10px", overflowY: "auto", boxSizing: "border-box" } },
+						h("div", { style: { fontSize: 11, color: C.text2, fontWeight: 600, padding: "0 4px 6px", letterSpacing: 0.5 } }, "大纲"),
+						headings.map((hd) =>
+							h(
+								"div",
+								{ key: hd.ord, onClick: () => jumpHeading(hd), title: hd.text, style: { fontSize: 12, color: C.text1, padding: "4px 6px", paddingLeft: 6 + (hd.level - 1) * 10, cursor: "pointer", borderRadius: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } },
+								hd.text || "（空标题）"
+							)
+						)
+					)
+				: null;
+
+			const historyModal = h(
+				Modal,
+				{ open: histOpen, onClose: () => setHistOpen(false), title: "版本历史" },
+				versions.length === 0
+					? h("div", { style: { fontSize: 12, color: C.text2, padding: "8px 0" } }, "还没有可回滚的版本。每次正文变动都会留一个快照，最多保留 20 个。")
+					: h(
+							"div",
+							{ style: { display: "flex", flexDirection: "column", gap: 6, maxHeight: "54vh", overflowY: "auto" } },
+							versions.slice().reverse().map((v) =>
+								h(
+									"div",
+									{ key: v.rev, style: { display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", border: "1px solid " + C.border, borderRadius: 8 } },
+									h(
+										"div",
+										{ style: { flex: 1, minWidth: 0 } },
+										h("div", { style: { fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, v.title || "未命名笔记"),
+										h("div", { style: { fontSize: 11, color: C.text2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, relTime(v.savedAt || "—") + " · rev " + v.rev + " · " + mdPlainClient(v.content).slice(0, 40))
+									),
+									h(Btn, { onClick: () => restoreVersion(v), style: { padding: "4px 10px", fontSize: 12 } }, "恢复")
+								)
+							)
+						)
+			);
+
+			const linkModal = h(
+				Modal,
+				{ open: linkOpen, onClose: () => setLinkOpen(false), title: "插入内链" },
+				h("div", { style: { fontSize: 12, color: C.text2, marginBottom: 8 } }, "选一个待办或会议，插入形如 [标题](todo:id) 的链接；在预览里点击会跳到对应面板。"),
+				h("div", { style: { fontSize: 12, fontWeight: 600, margin: "6px 0 4px" } }, "待办"),
+				linkItems.todos.length === 0
+					? h("div", { style: { fontSize: 11, color: C.text2 } }, "暂无待办")
+					: linkItems.todos.map((it) => h("button", { key: it.id, type: "button", style: Object.assign({}, S.menuItem, { fontSize: 12.5 }), onClick: () => insertInternalLink("todo", it) }, it.title)),
+				h("div", { style: { fontSize: 12, fontWeight: 600, margin: "10px 0 4px" } }, "会议"),
+				linkItems.meetings.length === 0
+					? h("div", { style: { fontSize: 11, color: C.text2 } }, "暂无会议")
+					: linkItems.meetings.map((it) => h("button", { key: it.id, type: "button", style: Object.assign({}, S.menuItem, { fontSize: 12.5 }), onClick: () => insertInternalLink("meeting", it) }, (it.date || "") + " " + (it.time || "") + " · " + it.title))
+			);
+
+			return h(
+				"div",
+				{ style: { flex: 1, display: "grid", gridTemplateColumns: outlineVisible ? "240px minmax(0, 1fr) 168px" : "240px minmax(0, 1fr)", height: "100%", overflow: "hidden", background: C.page, color: C.text0, fontFamily: FONT, fontSize: 14, boxSizing: "border-box" } },
+				sidebar,
+				main,
+				outline,
+				historyModal,
+				linkModal
 			);
 		}
 
@@ -2054,6 +3123,8 @@ window.__ModuleLoader__.load({
 				st.id = "tidywork-theme";
 				st.textContent = THEME_CSS;
 				document.head.appendChild(st);
+				// 笔记的 Markdown 样式也随 head 一起补回（DSH 路由切换会重建 head）
+				ensureMdCss();
 			};
 			setTheme();
 			setTitle();
@@ -2068,6 +3139,7 @@ window.__ModuleLoader__.load({
 				const raf = (fn) => setTimeout(fn, 0);
 				raf(() => {
 					scheduled = false;
+					ensureMdCss();
 					setTheme();
 					setTitle();
 					setIcon();
@@ -2155,7 +3227,7 @@ window.__ModuleLoader__.load({
 					ctx.slots.register({ name: "sidebar.panellist", id, order: panel.order, locale: NS, label: () => t(panel.labelKey) }, Icons[key])
 				);
 				ctx.slots.inject("main", () =>
-					ctx.slots.register({ name: "main", key: id, locale: NS, inject: () => ({}) }, pages[key])
+					ctx.slots.register({ name: "main", key: id, locale: NS, inject: () => ({ openPanel: (pid) => ctx.layout.selectPanel(pid) }) }, pages[key])
 				);
 			}
 
