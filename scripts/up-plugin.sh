@@ -7,11 +7,11 @@ cd "$PROJ"
 docker compose -f docker-compose.yml -f docker-compose.plugin.yml up -d
 echo "▶ 等待 DSH（含插件）就绪..."
 for _ in $(seq 1 40); do
-  docker compose logs --tail=200 dsh 2>/dev/null | grep -q "dsh web ready" && break
+  docker compose logs --tail=200 assistant 2>/dev/null | grep -q "dsh web ready" && break
   sleep 1
 done
 
 URL="$(cat data/context/dsh-web-url.txt 2>/dev/null || true)"
-[ -z "$URL" ] && { echo "✗ 未就绪，看日志：docker compose logs -f dsh"; exit 1; }
+[ -z "$URL" ] && { echo "✗ 未就绪，看日志：docker compose logs -f assistant"; exit 1; }
 echo ""
 echo "✅ TidyWork 插件已就位：$URL"

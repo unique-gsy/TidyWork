@@ -66,7 +66,7 @@ data/dsh/profiles/web/tidywork/{todos,meetings,notes}.json   工作区业务数�
 
 ```bash
 vim plugin/lib/client.js
-docker restart tidywork-dsh     # 入口脚本会 diff 插件目录并自动重装
+docker restart tidywork-assistant     # 入口脚本会 diff 插件目录并自动重装
 ```
 
 ## 目录结构
