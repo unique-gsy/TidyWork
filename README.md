@@ -45,14 +45,19 @@ bash scripts/up-plugin.sh      # 等同 docker compose -f docker-compose.yml -f 
 
 ## 已经装了 DSH 桌面版？用 `desktop/`
 
-对方装的是 **DeepSeek Harness 桌面客户端（macOS）**、不想折腾 Docker 时，用仓库里的 `desktop/` 目录，或者一个压缩包：
+对方装的是 **DeepSeek Harness 桌面客户端**、不想折腾 Docker 时，用仓库里的 `desktop/` 目录，或者一个压缩包。脚本按平台分开：
+
+| 系统 | 安装 | 卸载 |
+| --- | --- | --- |
+| macOS | 双击 `desktop/macOS/安装.command` | `desktop/macOS/卸载.command` |
+| Windows | 双击 `desktop/Windows/安装.bat` | `desktop/Windows/卸载.bat` |
 
 1. 先打开一次 DSH 桌面版（生成 `~/.dsh/profiles/desktop` 配置目录），然后退出。
-2. 双击 `desktop/安装.command`（被系统拦「无法验证开发者」时右键 → 打开）。
-   或在终端执行 `sh desktop/install.sh`。
+2. 双击上表对应文件（macOS 被系统拦「无法验证开发者」时右键 → 打开；Windows 被 SmartScreen 拦时点「更多信息 → 仍要运行」）。
+   终端里也行：`sh desktop/macOS/install.sh`。
 3. 脚本自动重启 DSH，侧边栏出现「工作台 / 待办 / 会议 / 笔记」即成功。
 
-脚本只做四件事：把插件复制到 `~/.dsh/plugins/tidywork-plugin`、再放一份到 `~/.dsh/profiles/desktop/node_modules/@tidywork/dsh-plugin`、备份并原地登记 `~/.dsh/profiles/desktop/package.json`（`dependencies` + `dsh.profile.bundles`）、重启应用。不改 `DeepSeek Harness.app` 本体，不需要 Node/pnpm。卸载用 `desktop/卸载.command`，数据保留。
+脚本只做四件事：把插件复制到 `~/.dsh/plugins/tidywork-plugin`、再放一份到 `~/.dsh/profiles/desktop/node_modules/@tidywork/dsh-plugin`、备份并原地登记 `~/.dsh/profiles/desktop/package.json`（`dependencies` + `dsh.profile.bundles`）、重启应用。不改 `DeepSeek Harness.app` 本体，不需要 Node/pnpm，不需要管理员权限。卸载后数据保留。
 
 ## 模型凭据
 
