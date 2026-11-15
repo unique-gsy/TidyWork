@@ -6,3 +6,7 @@ data/
 backups/
 *.log
 .DS_Store
+
+# 打包中间产物与出包目录（build-desktop-package.sh 生成）
+desktop/plugin/
+dist/

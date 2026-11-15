@@ -1,11 +1,13 @@
 #!/bin/sh
-# TidyWork 插件安装脚本（DSH 桌面版 · macOS）
-# 用法：双击「安装.command」，或在终端里执行 sh install.sh
+# TidyWork 插件安装脚本（DSH 桌面版 · macOS / Linux 共用）
+# 用法：macOS 双击「安装-mac.command」，或在终端里执行 sh install-mac.sh
+# Linux 若自动找不到应用，用 TW_APP=/path/to/DeepSeekHarness 指定
 set -u
 
 say() { printf '%s\n' "$*"; }
 fail() { printf '\n[失败] %s\n' "$*"; exit 1; }
 
+OS=$(uname -s)
 HERE=$(cd -- "$(dirname -- "$0")" && pwd)
 # 压缩包里插件在 plugin/；放进仓库 desktop/ 时插件在上级 plugin/，两种都认
 SRC="${HERE}/plugin"
@@ -13,15 +15,37 @@ SRC="${HERE}/plugin"
 PROFILE="${TW_PROFILE:-$HOME/.dsh/profiles/desktop}"
 STORE="${TW_STORE:-$HOME/.dsh/plugins/tidywork-plugin}"
 
-say "TidyWork 插件安装（DSH 桌面版）"
+say "TidyWork 插件安装（DSH 桌面版 · ${OS}）"
 say "--------------------------------------"
 
 # 1) 找应用
-APP="/Applications/DeepSeek Harness.app"
-[ -d "${APP}" ] || APP="$HOME/Applications/DeepSeek Harness.app"
-[ -d "${APP}" ] || fail "没找到 DeepSeek Harness.app。请先装好 DSH 桌面版再运行本脚本。"
-NODE_BIN="${APP}/Contents/MacOS/DeepSeek Harness"
-[ -x "${NODE_BIN}" ] || fail "应用目录不完整：找不到内置运行时。"
+APP=""
+if [ -n "${TW_APP:-}" ]; then
+  APP="${TW_APP}"
+elif [ "${OS}" = "Darwin" ]; then
+  for c in "/Applications/DeepSeek Harness.app" "${HOME}/Applications/DeepSeek Harness.app"; do
+    [ -d "${c}" ] && { APP="${c}"; break; }
+  done
+else
+  for c in "${HOME}/Applications/DeepSeek Harness.AppImage" \
+           "${HOME}/Applications/DeepSeekHarness.AppImage" \
+           "/opt/DeepSeek Harness/deepseek-harness" \
+           "${HOME}/.local/bin/deepseek-harness"; do
+    [ -x "${c}" ] && { APP="${c}"; break; }
+  done
+  if [ -z "${APP}" ]; then
+    APP=$(ls -1 "${HOME}"/Applications/*[Hh]arness*.AppImage 2>/dev/null | head -1)
+  fi
+fi
+[ -n "${APP}" ] || fail "没找到 DeepSeek Harness 桌面版。请先装好再运行本脚本。
+   Linux 上可用 TW_APP=/path/to/应用 指定路径。"
+
+if [ "${OS}" = "Darwin" ]; then
+  NODE_BIN="${APP}/Contents/MacOS/DeepSeek Harness"
+else
+  NODE_BIN="${APP}"
+fi
+[ -x "${NODE_BIN}" ] || fail "找不到应用内置运行时：${NODE_BIN}"
 say "应用：${APP}"
 
 # 2) 检查 profile（DSH 桌面版必须被打开过一次才会生成）
@@ -71,9 +95,16 @@ say "已在 profile 中登记插件（备份：${BAK}）"
 if [ "${TW_NO_RESTART:-0}" != "1" ]; then
   say ""
   say "正在重启 DSH 桌面版…"
-  osascript -e 'tell application "DeepSeek Harness" to quit' >/dev/null 2>&1 || true
-  sleep 3
-  open -a "${APP}" >/dev/null 2>&1 || fail "自动重启失败，请手动打开 DeepSeek Harness。"
+  if [ "${OS}" = "Darwin" ]; then
+    osascript -e 'tell application "DeepSeek Harness" to quit' >/dev/null 2>&1 || true
+    sleep 3
+    open -a "${APP}" >/dev/null 2>&1 || fail "自动重启失败，请手动打开 DeepSeek Harness。"
+  else
+    pkill -f "DeepSeek Harness" >/dev/null 2>&1 || true
+    sleep 3
+    nohup "${NODE_BIN}" >/dev/null 2>&1 &
+    say "已重新拉起应用（如果没看到窗口，手动打开一次即可）。"
+  fi
 fi
 
 say ""
