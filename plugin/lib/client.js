@@ -1950,8 +1950,63 @@ window.__ModuleLoader__.load({
 			{ id: "tidywork-notes", kind: "notes", labelKey: "notes", order: -6 }
 		];
 
+		// ===== 浏览器标签页品牌（title + favicon）=====
+		// DSH 宿主的标签页原本是「DeepSeek Harness + 鲸鱼图标」，插件在页面里跑，
+		// 直接把 head 里的 title 与 icon 换成 TidyWork；DSH 路由切换会重建 head，
+		// 用 MutationObserver 守着，并在内部做幂等判断，避免自己改自己形成死循环。
+		const BRAND_TITLE = "TidyWork";
+		const BRAND_ICON =
+			"data:image/svg+xml," +
+			encodeURIComponent(
+				'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">' +
+					'<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">' +
+					'<stop offset="0" stop-color="#3370ff"/><stop offset="1" stop-color="#6b9fff"/>' +
+					"</linearGradient></defs>" +
+					'<rect width="64" height="64" rx="18" fill="url(#g)"/>' +
+					'<text x="32" y="45" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,\'Segoe UI\',Helvetica,Arial,sans-serif" font-size="36" font-weight="700" fill="#ffffff">T</text>' +
+					"</svg>"
+			);
+
+		function applyBranding() {
+			if (typeof document === "undefined") return () => {};
+			const setTitle = () => {
+				if (document.title !== BRAND_TITLE) document.title = BRAND_TITLE;
+			};
+			const setIcon = () => {
+				const links = Array.from(document.querySelectorAll('link[rel*="icon"]'));
+				// 已经只有我们这一个、且 href/rel 都对，就不动 DOM（否则会自触发观察回调）
+				if (links.length === 1 && links[0].getAttribute("rel") === "icon" && links[0].getAttribute("href") === BRAND_ICON) return;
+				links.forEach((l) => l.parentNode && l.parentNode.removeChild(l));
+				const link = document.createElement("link");
+				link.rel = "icon";
+				link.type = "image/svg+xml";
+				link.href = BRAND_ICON;
+				document.head.appendChild(link);
+			};
+			setTitle();
+			setIcon();
+
+			let scheduled = false;
+			const schedule = () => {
+				if (scheduled) return;
+				scheduled = true;
+				const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (fn) => setTimeout(fn, 16);
+				raf(() => {
+					scheduled = false;
+					setTitle();
+					setIcon();
+				});
+			};
+			const mo = new MutationObserver(schedule);
+			if (document.head) mo.observe(document.head, { childList: true, subtree: true, characterData: true });
+			return () => mo.disconnect();
+		}
+
 		/** 应用主体：品牌替换 + 工作台主面板 + 3 组侧边栏入口/主面板。 */
 		function apply(ctx) {
+			// 标签页品牌：标题与 favicon 换成 TidyWork（跟随页面生命周期）
+			ctx.effect(() => applyBranding(), "tidywork: branding");
+
 			const dict = { home: "工作台", todos: "待办", meetings: "会议", notes: "笔记" };
 			ctx.effect(() => ctx.locale.register(NS, { zh: dict, en: dict }), "tidywork: locale");
 			const t = ctx.locale.bind(NS);
