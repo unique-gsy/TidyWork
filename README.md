@@ -43,6 +43,17 @@ bash scripts/up-plugin.sh      # 等同 docker compose -f docker-compose.yml -f 
 
 容器会重建一次（挂载 `plugin/`），入口脚本检测到插件后自动装进 DSH 的 web profile。刷新页面，侧边栏出现「TidyWork」，点进去就是工作台。
 
+## 已经装了 DSH 桌面版？用 `desktop/`
+
+对方装的是 **DeepSeek Harness 桌面客户端（macOS）**、不想折腾 Docker 时，用仓库里的 `desktop/` 目录，或者一个压缩包：
+
+1. 先打开一次 DSH 桌面版（生成 `~/.dsh/profiles/desktop` 配置目录），然后退出。
+2. 双击 `desktop/安装.command`（被系统拦「无法验证开发者」时右键 → 打开）。
+   或在终端执行 `sh desktop/install.sh`。
+3. 脚本自动重启 DSH，侧边栏出现「工作台 / 待办 / 会议 / 笔记」即成功。
+
+脚本只做四件事：把插件复制到 `~/.dsh/plugins/tidywork-plugin`、再放一份到 `~/.dsh/profiles/desktop/node_modules/@tidywork/dsh-plugin`、备份并原地登记 `~/.dsh/profiles/desktop/package.json`（`dependencies` + `dsh.profile.bundles`）、重启应用。不改 `DeepSeek Harness.app` 本体，不需要 Node/pnpm。卸载用 `desktop/卸载.command`，数据保留。
+
 ## 模型凭据
 
 两选一：
