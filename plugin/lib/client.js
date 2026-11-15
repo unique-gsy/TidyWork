@@ -1308,27 +1308,108 @@ window.__ModuleLoader__.load({
 				};
 			}, [menu]);
 
-			// 新建入口：跳 DSH 会话并预填一句自然语言草稿，用户补全后回车即可
-			const startWithDraft = (prefix) => {
-				setMenu(false);
-				if (props.openConversation) props.openConversation();
-				setTimeout(() => {
-					const list = Array.prototype.slice.call(document.querySelectorAll("[contenteditable=\"true\"], textarea"))
+			// 新建入口：开一个全新的对话，并在输入框预填本次意图。
+			// 工作区身份由服务端注册的 system prompt（tidywork:workspace）交代，
+			// 这里只负责把"这次要做什么"写成首条消息的开头，用户补全后回车即可。
+			const DRAFT_PREFIX = {
+				todo: "帮我新建一条待办（TidyWork 工作区）：",
+				meeting: "帮我安排一场会议（TidyWork 工作区）：",
+				note: "帮我记一条笔记（TidyWork 工作区）："
+			};
+			const DRAFT_ALL = Object.keys(DRAFT_PREFIX).map((k) => DRAFT_PREFIX[k]);
+			/**
+			 * 把宿主编辑器里的内容整体替换成 text。
+			 * 实测这套编辑器（受控 contenteditable）只认自己那一侧的输入通道：
+			 * 直接改 DOM 会被 store 回滚，execCommand("delete") 无效，
+			 * 而"有内容时"execCommand("insertText") 会返回 true 却什么都不变。
+			 * 所以这里先建选区，再走 beforeinput 事件（宿主自己处理替换），
+			 * 最后才退回 execCommand 作兜底。
+			 */
+			function replaceEditorText(el, text) {
+				try {
+					const range = document.createRange();
+					range.selectNodeContents(el);
+					const sel = window.getSelection();
+					sel.removeAllRanges();
+					sel.addRange(range);
+					el.focus();
+				} catch (e) {}
+				try {
+					const ev = new InputEvent("beforeinput", { inputType: "insertText", data: text, bubbles: true, cancelable: true, composed: true });
+					const notHandled = el.dispatchEvent(ev);
+					if (!notHandled) return true; // 编辑器接管了这次输入
+				} catch (e) {}
+				try {
+					return document.execCommand("insertText", false, text);
+				} catch (e) {
+					return false;
+				}
+			}
+			const startNewConversation = (kind) => {
+				const prefix = DRAFT_PREFIX[kind];
+				if (!prefix) return;
+				console.log("[tidywork] new conversation for:", kind);
+				// 1) 触发宿主「新建会话」；按钮不在（窄屏/侧栏收起）就退回会话面板
+				const newBtn = document.querySelector('button[aria-label="新建会话"]');
+				if (newBtn) {
+					try { newBtn.click(); } catch (e) {}
+				} else if (props.openConversation) {
+					try { props.openConversation(); } catch (e) {}
+				}
+				// 2) 写入草稿并校验。宿主的编辑器是受控的：点「新建会话」后它可能
+				//    重建输入框 / 把上一份草稿恢复回来，所以写一次不够，要回读确认再补写。
+				const pick = () => {
+					const list = Array.prototype.slice.call(document.querySelectorAll('[contenteditable="true"], textarea'))
 						.filter((el) => el.offsetParent !== null);
-					const el = list[list.length - 1];
-					if (!el) return;
-					try { el.focus(); } catch (e) {}
-					const cur = (el.value !== undefined ? el.value : el.textContent) || "";
-					const curTrim = cur.trim();
-					if (curTrim) {
-						// 只接管本插件自己填的句式；用户已经在写的内容保持不动
-						const ours = ["帮我新建一个待办：", "帮我新建一个会议：", "帮我记一条笔记："];
-						if (!ours.some((p) => curTrim.indexOf(p) === 0)) return;
-						try { document.execCommand("selectAll"); } catch (e) {}
+					return list[list.length - 1] || null;
+				};
+				const read = (el) => ((el.value !== undefined ? el.value : el.textContent) || "").trim();
+				let tries = 0;
+				const fill = () => {
+					tries += 1;
+					const el = pick();
+					if (!el) {
+
+						if (tries < 6) setTimeout(fill, 220);
+						return;
 					}
-					try { document.execCommand("insertText", false, prefix); } catch (e) {}
+					const cur = read(el);
+					// 用户自己写的内容不碰（既不是空，也不是本插件填过的句式）
+					if (cur && !DRAFT_ALL.some((p) => cur.indexOf(p) === 0)) return;
+					if (cur.indexOf(prefix) === 0) return; // 已经是目标草稿
+					try { el.focus(); } catch (e) {}
+					// 用 Range 精确选中编辑器内容再整体替换。
+					// execCommand("selectAll") 在宿主重渲染期间不一定真的建立选区，
+					// 实测会出现"命令返回 true 但文本没变"，所以这里不依赖它。
+					try {
+						const range = document.createRange();
+						range.selectNodeContents(el);
+						const sel = window.getSelection();
+						sel.removeAllRanges();
+						sel.addRange(range);
+					} catch (e) {}
+					replaceEditorText(el, prefix);
+					// 兜底：Range 通路没写进去时再补一次 selectAll + insertText
+					setTimeout(() => {
+						const elB = pick();
+						if (!elB) return;
+						const nowB = read(elB);
+						if (nowB.indexOf(prefix) === 0) return;
+						if (nowB && !DRAFT_ALL.some((p) => nowB.indexOf(p) === 0)) return;
+						try { elB.focus(); } catch (e) {}
+						try { document.execCommand("selectAll"); } catch (e) {}
+						try { document.execCommand("insertText", false, prefix); } catch (e) {}
+					}, 180);
 					try { el.scrollIntoView({ block: "nearest" }); } catch (e) {}
-				}, 320);
+					// 回读校验：没写进去（或被宿主恢复成旧草稿）就再试一次
+					setTimeout(() => {
+						const el2 = pick();
+						const now = el2 ? read(el2) : "";
+						const acceptable = now.indexOf(prefix) === 0 || now === "";
+						if (!acceptable && tries < 6 && (now === "" || DRAFT_ALL.some((p) => now.indexOf(p) === 0))) fill();
+					}, 320);
+				};
+				setTimeout(fill, 260);
 			};
 
 			const reload = useCallback(() => {
@@ -1649,12 +1730,12 @@ window.__ModuleLoader__.load({
 									id: "tw-new-menu",
 									style: { position: "absolute", right: 0, top: "calc(100% + 8px)", zIndex: 60, minWidth: 192, background: C.main, border: "1px solid " + C.border, borderRadius: 10, boxShadow: "0 10px 28px rgba(0,0,0,0.14)", padding: 6, display: "flex", flexDirection: "column", gap: 2 }
 								},
-								[["新建待办", "plus", () => startWithDraft("帮我新建一个待办：")], ["新建会议", "cal", () => startWithDraft("帮我新建一个会议：")], ["新建笔记", "note", () => startWithDraft("帮我记一条笔记：")]].map(([label, d, act]) =>
+								[["新建待办", "plus", "todo"], ["新建会议", "cal", "meeting"], ["新建笔记", "note", "note"]].map(([label, d, kind]) =>
 									h(
 										"button",
 										{
 											key: label,
-											onClick: () => { setMenu(false); act(); },
+											onClick: () => { setMenu(false); startNewConversation(kind); },
 											onMouseEnter: (e) => { e.currentTarget.style.background = C.page; },
 											onMouseLeave: (e) => { e.currentTarget.style.background = "transparent"; },
 											style: { display: "flex", alignItems: "center", gap: 9, width: "100%", padding: "8px 9px", border: "none", background: "transparent", cursor: "pointer", fontFamily: FONT, fontSize: 12.5, color: C.text0, textAlign: "left", borderRadius: 6 }
@@ -1990,7 +2071,9 @@ window.__ModuleLoader__.load({
 			const schedule = () => {
 				if (scheduled) return;
 				scheduled = true;
-				const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (fn) => setTimeout(fn, 16);
+				// 不用 rAF：后台标签页里 rAF 会被浏览器节流，修正就永远不执行，
+				// 标题会停在宿主设的「DeepSeek Harness」。setTimeout 不受此限。
+				const raf = (fn) => setTimeout(fn, 0);
 				raf(() => {
 					scheduled = false;
 					setTitle();

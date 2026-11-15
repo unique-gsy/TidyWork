@@ -1,33 +1,38 @@
 # ============================================================================
-# TidyWork · 第一步：部署 DSH（DeepSeek Harness）
+# TidyWork AI 助手 · 一键部署（OrbStack / Docker 通用）
 #
-#   cp .env.example .env      # 首次：填 DEEPSEEK_API_KEY（或留空后登录账号）
+# 用法：在本文件所在目录执行
+#   cp .env.example .env        # 首次：生成环境配置
+#   vim .env                    # 填入 DEEPSEEK_API_KEY
 #   docker compose up -d --build
+# 访问：http://localhost:3080（地址含 token，见 data/context/dsh-web-url.txt）
 #
-# 访问：http://localhost:3080（带 token 的完整地址见 data/context/dsh-web-url.txt）
-# 此时是纯 DSH：有原生对话，侧边栏没有「TidyWork」工作区入口。
+# 数据（默认 ./data，可整体改位置）：
+#   data/dsh/        DSH 数据目录（workspace/sessions/skills + 工作区业务数据），容器重建不丢
+#   data/context/    你的个人上下文（可选，放 context.md 助手每次回答都会参考）
 #
-# 下一步（叠加插件）：docker compose -f docker-compose.yml -f docker-compose.plugin.yml up -d
+# 分享给他人：把整个项目（含 docker-compose.yml）推到 GitHub，
+# 对方 clone 后同样 `cp .env.example .env && docker compose up -d --build` 即可。
 # ============================================================================
 
-name: tidywork
+name: tidywork-assistant
 
 services:
-  dsh:
-    build:
-      context: .
-      dockerfile: dsh/Dockerfile
-    image: tidywork-dsh:latest
-    container_name: tidywork-dsh
+  assistant:
+    build: .
+    image: tidywork-assistant:latest
+    container_name: tidywork-assistant
     restart: unless-stopped
     ports:
+      # DSH Web（工作台 + 原生对话；启动后读 data/context/dsh-web-url.txt 取带 token 地址）
       - "${DSH_WEB_PORT:-3080}:3080"
     environment:
+      # DSH 使用的 DeepSeek API Key（必填，DSH provider 默认读取此变量）
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
-      # 宿主机端口（仅用于生成正确的访问地址，写进 data/context/dsh-web-url.txt）
-      - DSH_HOST_PORT=${DSH_WEB_PORT:-3080}
+      # 容器时区：工作区时间戳（笔记 updatedAt、待办截止等）按本地时区生成
+      - TZ=${TZ:-Asia/Shanghai}
     volumes:
-      # DSH 数据（workspace / sessions / 登录凭据 / 插件安装结果），容器重建不丢
+      # DSH 数据持久化（workspace/sessions/skills + 工作区业务数据），默认 ./data/dsh
       - ${TIDYWORK_DATA_DIR:-./data}/dsh:/root/.dsh
-      # 个人上下文（可选，放 context.md 助手每次回答都会参考）
+      # 个人上下文目录（context.md），默认 ./data/context
       - ${TIDYWORK_DATA_DIR:-./data}/context:/data

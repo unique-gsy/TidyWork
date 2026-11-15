@@ -17,9 +17,10 @@ const name = "tidywork";
  * 依赖宿主服务：
  *  - webServer 提供 HTTP 路由注册；
  *  - tools 提供 Agent 工具注册（会话中自然语言新增待办）；
- *  - workspaceRegistry 提供“独属于 TidyWork 的工作区”注册。
+ *  - workspaceRegistry 提供“独属于 TidyWork 的工作区”注册；
+ *  - systemPrompt 提供会话系统提示注册（告诉每个会话"这里是 TidyWork 工作区"）。
  */
-const inject = ["webServer", "tools", "workspaceRegistry"];
+const inject = ["webServer", "tools", "workspaceRegistry", "systemPrompt"];
 
 /** 本地时间戳 YYYY-MM-DDTHH:mm:ss（不带时区，前端按本地解析，避免 UTC 偏移）。 */
 function localStamp() {
@@ -512,6 +513,31 @@ async function addMeeting(args) {
   });
 }
 
+/**
+ * 会话级系统提示：让每个会话都知道自己跑在 TidyWork 工作区里。
+ * 只描述"有什么能力、怎么写"，不改变其他话题的回答方式；order 取 800（在第一方指引之后）。
+ */
+const WORKSPACE_PROMPT = {
+  name: "tidywork:workspace",
+  order: 800,
+  text: [
+    "## TidyWork 工作区",
+    "本部署安装了 TidyWork 插件：DSH 侧边栏有「工作台 / 待办 / 会议 / 笔记」四块面板，数据以 JSON 存在本地，面板会在写入后立即刷新。",
+    "当用户要新建待办、安排会议、记笔记（或把某件事记成待办）时，直接写入工作区数据，不要让用户自己去面板手动录。",
+    "写入方式：调用本工作区的 HTTP 接口（服务就跑在本容器 3080 端口，无鉴权）。请用 bash + curl，不要直接编辑 data/ 下的 JSON 文件——那会绕过串行写锁，可能写坏数据。",
+    "接口与字段：",
+    "- 待办 POST /tidywork-api/todos — title 必填；priority 取 high | mid | low（默认 mid）；category 默认「工作」；due 取 today | tomorrow | week | YYYY-MM-DD | none。",
+    "- 会议 POST /tidywork-api/meetings — title 与 date（YYYY-MM-DD）必填；time（HH:MM）、duration、location、participants 可选。",
+    "- 笔记 POST /tidywork-api/notes — content 必填（保留用户口述的原文），title 可选（不给就按内容概括一个短标题）。",
+    '调用示例：curl -s -X POST "http://$(hostname -I | awk \'{print $1}\'):3080/tidywork-api/todos" -H "content-type: application/json" -d \'{"title":"周三前交季度复盘","due":"week"}\'',
+    "如果当前会话里也存在 tidywork_add_todo / tidywork_add_meeting / tidywork_add_note 工具，优先用工具；工具不在可用列表时就按上面的 curl 方式写入。",
+    "写完后用一句话告诉用户「已写入工作区」并复述关键字段，不要粘贴整段 JSON。",
+    "用户没给的字段不要编造：缺标题就先问，缺时间就按当天最接近的整点提示确认；一次只补齐真正必要的信息。",
+    "删除、修改已有条目由用户在插件面板操作，不要代替用户删除数据。",
+    "与工作项无关的话题按平常方式回答，不必主动提起本工作区。",
+  ].join("\n"),
+};
+
 /** Agent 工具：自然语言新增会议（手工构造 ToolDefinition，不依赖 @deepseek-ai/dsh-tools）。 */
 const MEETING_ADD_TOOL = {
   name: "tidywork_add_meeting",
@@ -547,6 +573,63 @@ const MEETING_ADD_TOOL = {
   },
   async execute(args) {
     return addMeeting(args);
+  }
+};
+
+/** 通过 Agent 工具新增一条笔记（与 POST /tidywork-api/notes 同一存储）。 */
+async function addNote(args) {
+  const file = join(dataRoot(), "notes.json");
+  const title = escStr(args.title, 60).trim() || "未命名笔记";
+  const content = String(args.content == null ? "" : args.content);
+  if (!content.trim() && title === "未命名笔记") return { ok: false, error: "标题与正文至少要有一个" };
+  const item = {
+    id: rid("n"),
+    title,
+    preview: (content.slice(0, 24) + (content.length > 24 ? "..." : "")) || "新笔记",
+    content,
+    updatedAt: localStamp()
+  };
+  return withQueue("notes", async () => {
+    const store = await readStore(file, "notes");
+    store.items = store.items || [];
+    store.items.push(item);
+    await saveStore(file, store);
+    return { ok: true, data: item };
+  });
+}
+
+
+/** Agent 工具：自然语言新增笔记（手工构造 ToolDefinition，不依赖 @deepseek-ai/dsh-tools）。 */
+const NOTE_ADD_TOOL = {
+  name: "tidywork_add_note",
+  description:
+    "在 TidyWork 笔记中新增一条笔记。参数：title 笔记标题（简短概括，必填或可由正文概括）；content 笔记正文（用户口述的内容原文，尽量保留原话）。",
+  parameters: {
+    type: "object",
+    properties: {
+      title: { type: "string", description: "笔记标题" },
+      content: { type: "string", description: "笔记正文" }
+    },
+    required: ["content"]
+  },
+  output: {
+    schema: {
+      type: "object",
+      properties: {
+        ok: { type: "boolean" },
+        error: { type: "string" },
+        data: { type: "object" }
+      }
+    },
+    render: (args, value) => {
+      const ok = Boolean(value && value.ok);
+      const title = args && args.title ? args.title : "";
+      const error = value && value.error ? value.error : "未知错误";
+      return [{ type: "text", text: ok ? `已新建笔记「${title || "未命名笔记"}」` : `新建笔记失败：${error}` }];
+    }
+  },
+  async execute(args) {
+    return addNote(args);
   }
 };
 
@@ -624,10 +707,19 @@ async function apply(ctx) {
   // Agent 工具：会话中通过自然语言新增待办/会议。
   const disposeTools = ctx.tools.register(TODO_ADD_TOOL);
   const disposeMeeting = ctx.tools.register(MEETING_ADD_TOOL);
+  const disposeNote = ctx.tools.register(NOTE_ADD_TOOL);
   ctx.effect(() => {
     disposeTools();
     disposeMeeting();
+    disposeNote();
   }, "tidywork: agent tools");
+
+  // 会话系统提示：每个新会话都自带"这里是 TidyWork 工作区"的上下文。
+  if (ctx.systemPrompt) {
+    const disposePrompt = ctx.systemPrompt.section(WORKSPACE_PROMPT);
+    ctx.effect(() => disposePrompt, "tidywork: workspace prompt");
+    console.log("[tidywork] workspace prompt section registered");
+  }
 }
 
 export { apply, inject, name };
