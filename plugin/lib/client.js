@@ -150,6 +150,107 @@ window.__ModuleLoader__.load({
 			return true;
 		}
 		const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+		// ===== v3.16：今日工作项会话 =====
+		// 「＋ 新建工作项」不再每次开一个新会话，而是回到 TidyWork 工作区里"今天"的那个会话：
+		//   ① 没有 TidyWork 工作区 → 建一个（目录由用户选，路径因机器而异，插件不猜）；
+		//   ② 该工作区下今天还没有会话 → 建一个；
+		//   ③ 直接打开它 —— 派什么活、怎么归类，由服务端的系统提示承载，不占对话。
+		// 全程走宿主服务（ctx.workspaces / ctx.uiWorkspace），不再靠点 DOM 上的「新建会话」按钮。
+		const TODAY_SESSION_KEY = "tidywork.todaySession";
+		const WORKSPACE_TITLE = "tidywork";
+
+		function ymdLocal(d) {
+			const p = (n) => (n < 10 ? "0" + n : "" + n);
+			return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+		}
+		function readTodaySession() {
+			try {
+				const raw = localStorage.getItem(TODAY_SESSION_KEY);
+				return raw ? JSON.parse(raw) : null;
+			} catch (e) {
+				return null;
+			}
+		}
+		function writeTodaySession(id) {
+			try {
+				localStorage.setItem(TODAY_SESSION_KEY, JSON.stringify({ d: ymdLocal(new Date()), id: id }));
+			} catch (e) {}
+		}
+		/** 找 TidyWork 工作区；快照可能还在 loading，等一小会再判。 */
+		async function findTidyWorkspace(ctx) {
+			let lastError = null;
+			for (let i = 0; i < 12; i++) {
+				let items = [];
+				try {
+					const snap = ctx.workspaces.list.getSnapshot();
+					items = (snap && snap.items) || [];
+				} catch (e) {
+					lastError = e;
+				}
+				const exacts = items.filter((w) => String(w.title || "").trim().toLowerCase() === WORKSPACE_TITLE);
+				if (exacts.length) {
+					// 同名时取最早建的那个，避免用户后来手建同名工作区后命中错的那一份
+					exacts.sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+					return exacts[0];
+				}
+				if (items.length) {
+					const loose = items.find((w) => String(w.title || "").toLowerCase().indexOf(WORKSPACE_TITLE) !== -1);
+					if (loose) return loose;
+					break;
+				}
+				await sleep(250);
+			}
+			console.warn("[tidywork] 未找到 TidyWork 工作区", lastError, describeWorkspaces(ctx));
+			return null;
+		}
+		function describeWorkspaces(ctx) {
+			try {
+				const snap = ctx.workspaces.list.getSnapshot();
+				return { state: snap && snap.state, phase: snap && snap.phase, items: ((snap && snap.items) || []).map((w) => String(w.title) + "|" + String(w.path)) };
+			} catch (e) {
+				return "workspaces 服务不可用：" + ((e && e.message) || e);
+			}
+		}
+		/**
+		 * 拿一个目录来承载 TidyWork 工作区。
+		 * 桌面端有原生目录选择器；web 端 pick() 需要 native capability，只能用 browse 通道：
+		 * 先读 home，再在 home 下建 TidyWork 目录。
+		 */
+		async function ensureWorkspaceDir(ctx) {
+			try {
+				const dir = await ctx.uiWorkspace.pickDirectory();
+				if (dir) return dir;
+			} catch (e) {
+				console.warn("[tidywork] native picker 不可用：", e && e.message);
+			}
+			const listing = await ctx.uiWorkspace.listDirectory();
+			return await ctx.uiWorkspace.createDirectory(listing.home, "TidyWork");
+		}
+		/** 打开今天的 TidyWork 会话；没有就按 ①→②→③ 建出来。 */
+		async function openTodayWorkItem(ctx) {
+			try {
+				let ws = await findTidyWorkspace(ctx);
+				if (!ws) {
+					const dir = await ensureWorkspaceDir(ctx);
+					if (!dir) return;
+					ws = await ctx.workspaces.create({ path: dir });
+				}
+				const rec = readTodaySession();
+				const today = ymdLocal(new Date());
+				// 只有"日期是今天"且"会话仍在这个工作区里"才算命中——昨天那个会话今天又被翻动，不该复用
+				if (rec && rec.d === today && Array.isArray(ws.sessionIds) && ws.sessionIds.indexOf(rec.id) !== -1) {
+					ctx.uiWorkspace.openSession(rec.id);
+					return;
+				}
+				const sid = await ctx.uiWorkspace.connectWorkspace(ws.workspaceId);
+				writeTodaySession(sid);
+				ctx.uiWorkspace.openSession(sid);
+			} catch (e) {
+				toast("打不开今日会话：" + ((e && e.message) || "未知错误"));
+			}
+		}
+
 		async function openTidySession(kind, fallback) {
 			// 1) 复用：已有固定命名会话 → 打开它
 			const sid = localStorage.getItem(SESSION_KEYS[kind]);
@@ -1324,132 +1425,8 @@ window.__ModuleLoader__.load({
 			const [draft, setDraft] = useState("");
 			const [narrow, setNarrow] = useState(typeof window !== "undefined" ? window.innerWidth < 780 : false);
 			const [err, setErr] = useState(null);
-			const [menu, setMenu] = useState(false);
 			const today = ymd(new Date());
 			const month = today.slice(0, 7);
-
-			// 「＋ 新建」下拉：点外部或按 Esc 关闭
-			useEffect(() => {
-				if (!menu) return;
-				const onDoc = (e) => {
-					const box = document.getElementById("tw-new-menu");
-					const btn = document.getElementById("tw-new-btn");
-					if (box && box.contains(e.target)) return;
-					if (btn && btn.contains(e.target)) return;
-					setMenu(false);
-				};
-				const onKey = (e) => { if (e.key === "Escape") setMenu(false); };
-				document.addEventListener("mousedown", onDoc);
-				document.addEventListener("keydown", onKey);
-				return () => {
-					document.removeEventListener("mousedown", onDoc);
-					document.removeEventListener("keydown", onKey);
-				};
-			}, [menu]);
-
-			// 新建入口：开一个全新的对话，并在输入框预填本次意图。
-			// 工作区身份由服务端注册的 system prompt（tidywork:workspace）交代，
-			// 这里只负责把"这次要做什么"写成首条消息的开头，用户补全后回车即可。
-			const DRAFT_PREFIX = {
-				todo: "帮我新建一条待办（TidyWork 工作区）：",
-				meeting: "帮我安排一场会议（TidyWork 工作区）：",
-				note: "帮我记一条笔记（TidyWork 工作区）："
-			};
-			const DRAFT_ALL = Object.keys(DRAFT_PREFIX).map((k) => DRAFT_PREFIX[k]);
-			/**
-			 * 把宿主编辑器里的内容整体替换成 text。
-			 * 实测这套编辑器（受控 contenteditable）只认自己那一侧的输入通道：
-			 * 直接改 DOM 会被 store 回滚，execCommand("delete") 无效，
-			 * 而"有内容时"execCommand("insertText") 会返回 true 却什么都不变。
-			 * 所以这里先建选区，再走 beforeinput 事件（宿主自己处理替换），
-			 * 最后才退回 execCommand 作兜底。
-			 */
-			function replaceEditorText(el, text) {
-				try {
-					const range = document.createRange();
-					range.selectNodeContents(el);
-					const sel = window.getSelection();
-					sel.removeAllRanges();
-					sel.addRange(range);
-					el.focus();
-				} catch (e) {}
-				try {
-					const ev = new InputEvent("beforeinput", { inputType: "insertText", data: text, bubbles: true, cancelable: true, composed: true });
-					const notHandled = el.dispatchEvent(ev);
-					if (!notHandled) return true; // 编辑器接管了这次输入
-				} catch (e) {}
-				try {
-					return document.execCommand("insertText", false, text);
-				} catch (e) {
-					return false;
-				}
-			}
-			const startNewConversation = (kind) => {
-				const prefix = DRAFT_PREFIX[kind];
-				if (!prefix) return;
-				console.log("[tidywork] new conversation for:", kind);
-				// 1) 触发宿主「新建会话」；按钮不在（窄屏/侧栏收起）就退回会话面板
-				const newBtn = document.querySelector('button[aria-label="新建会话"]');
-				if (newBtn) {
-					try { newBtn.click(); } catch (e) {}
-				} else if (props.openConversation) {
-					try { props.openConversation(); } catch (e) {}
-				}
-				// 2) 写入草稿并校验。宿主的编辑器是受控的：点「新建会话」后它可能
-				//    重建输入框 / 把上一份草稿恢复回来，所以写一次不够，要回读确认再补写。
-				const pick = () => {
-					const list = Array.prototype.slice.call(document.querySelectorAll('[contenteditable="true"], textarea'))
-						.filter((el) => el.offsetParent !== null);
-					return list[list.length - 1] || null;
-				};
-				const read = (el) => ((el.value !== undefined ? el.value : el.textContent) || "").trim();
-				let tries = 0;
-				const fill = () => {
-					tries += 1;
-					const el = pick();
-					if (!el) {
-
-						if (tries < 6) setTimeout(fill, 220);
-						return;
-					}
-					const cur = read(el);
-					// 用户自己写的内容不碰（既不是空，也不是本插件填过的句式）
-					if (cur && !DRAFT_ALL.some((p) => cur.indexOf(p) === 0)) return;
-					if (cur.indexOf(prefix) === 0) return; // 已经是目标草稿
-					try { el.focus(); } catch (e) {}
-					// 用 Range 精确选中编辑器内容再整体替换。
-					// execCommand("selectAll") 在宿主重渲染期间不一定真的建立选区，
-					// 实测会出现"命令返回 true 但文本没变"，所以这里不依赖它。
-					try {
-						const range = document.createRange();
-						range.selectNodeContents(el);
-						const sel = window.getSelection();
-						sel.removeAllRanges();
-						sel.addRange(range);
-					} catch (e) {}
-					replaceEditorText(el, prefix);
-					// 兜底：Range 通路没写进去时再补一次 selectAll + insertText
-					setTimeout(() => {
-						const elB = pick();
-						if (!elB) return;
-						const nowB = read(elB);
-						if (nowB.indexOf(prefix) === 0) return;
-						if (nowB && !DRAFT_ALL.some((p) => nowB.indexOf(p) === 0)) return;
-						try { elB.focus(); } catch (e) {}
-						try { document.execCommand("selectAll"); } catch (e) {}
-						try { document.execCommand("insertText", false, prefix); } catch (e) {}
-					}, 180);
-					try { el.scrollIntoView({ block: "nearest" }); } catch (e) {}
-					// 回读校验：没写进去（或被宿主恢复成旧草稿）就再试一次
-					setTimeout(() => {
-						const el2 = pick();
-						const now = el2 ? read(el2) : "";
-						const acceptable = now.indexOf(prefix) === 0 || now === "";
-						if (!acceptable && tries < 6 && (now === "" || DRAFT_ALL.some((p) => now.indexOf(p) === 0))) fill();
-					}, 320);
-				};
-				setTimeout(fill, 260);
-			};
 
 			const reload = useCallback(() => {
 				const wrap = (p) => p.then((d) => ({ ok: true, d: d })).catch((e) => ({ ok: false, msg: (e && e.message) || "请求失败" }));
@@ -1753,54 +1730,16 @@ window.__ModuleLoader__.load({
 					h(
 						"div",
 						{ style: { display: "flex", alignItems: "center", gap: 8 } },
+						// v3.16：下拉与「开始对话」一并去掉 —— 三个分项都进同一个今日会话、用的是同一段系统提示，
+						// 留着只是三个按钮做同一件事。现在点它 = 回到今天的 TidyWork 会话。
 						h(
-							"div",
-							{ id: "tw-new-btn", style: { position: "relative" } },
-							h(
-								"button",
-								{
-									onClick: () => setMenu((v) => !v),
-									style: Object.assign({}, S.btnPrimary, { display: "flex", alignItems: "center", gap: 5 })
-								},
-								"＋ 新建",
-								h(HIcon, { d: "M6 9l6 6 6-6", size: 11, style: { opacity: 0.65, transform: menu ? "rotate(180deg)" : "none", transition: "transform .15s" } })
-							),
-							!menu ? null : h(
-								"div",
-								{
-									id: "tw-new-menu",
-									// WebkitAppRegion 内联声明 no-drag：下拉里的按钮虽已由宿主规则减除，
-									// 但菜单自身是 div，遮住的空白处仍会被当成窗口拖拽区。
-									style: { WebkitAppRegion: "no-drag", position: "absolute", right: 0, top: "calc(100% + 8px)", zIndex: 60, minWidth: 192, background: C.main, border: "1px solid " + C.border, borderRadius: 10, boxShadow: "0 10px 28px rgba(0,0,0,0.14)", padding: 6, display: "flex", flexDirection: "column", gap: 2 }
-								},
-								[["新建待办", "plus", "todo"], ["新建会议", "cal", "meeting"], ["新建笔记", "note", "note"]].map(([label, d, kind]) =>
-									h(
-										"button",
-										{
-											key: label,
-											onClick: () => { setMenu(false); startNewConversation(kind); },
-											onMouseEnter: (e) => { e.currentTarget.style.background = C.page; },
-											onMouseLeave: (e) => { e.currentTarget.style.background = "transparent"; },
-											style: { display: "flex", alignItems: "center", gap: 9, width: "100%", padding: "8px 9px", border: "none", background: "transparent", cursor: "pointer", fontFamily: FONT, fontSize: 12.5, color: C.text0, textAlign: "left", borderRadius: 6 }
-										},
-										h(HIcon, { d, size: 14, style: { color: C.accent } }),
-										label
-									)
-								),
-								h("div", { style: { height: 1, background: C.borderLight, margin: "4px 8px" } }),
-								h(
-									"button",
-									{
-										onClick: () => { setMenu(false); props.openConversation && props.openConversation(); },
-										onMouseEnter: (e) => { e.currentTarget.style.background = C.page; },
-										onMouseLeave: (e) => { e.currentTarget.style.background = "transparent"; },
-										style: { display: "flex", alignItems: "center", gap: 9, width: "100%", padding: "8px 9px", border: "none", background: "transparent", cursor: "pointer", fontFamily: FONT, fontSize: 12.5, color: C.text0, textAlign: "left", borderRadius: 6 }
-									},
-									h(HIcon, { d: "chat", size: 14, style: { color: C.text2 } }),
-									h("span", { style: { flex: 1 } }, "开始对话"),
-									h("span", { style: { fontSize: 10.5, color: C.text2 } }, "DSH 原生")
-								)
-							)
+							"button",
+							{
+								id: "tw-new-btn",
+								onClick: () => { if (props.openTodayWork) props.openTodayWork(); },
+								style: Object.assign({}, S.btnPrimary, { display: "flex", alignItems: "center", gap: 5 })
+							},
+							"＋ 新建工作项"
 						)
 					)
 				),
@@ -2065,7 +2004,7 @@ window.__ModuleLoader__.load({
 		};
 
 		// ===== 客户端插件注册 =====
-		const inject = ["slots", "locale", "layout"];
+		const inject = ["slots", "locale", "layout", "workspaces", "uiWorkspace"];
 		const NS = "tidywork";
 		const HOME = { id: "tidywork-home", order: -10, labelKey: "home" };
 		const PANELS = [
@@ -2200,7 +2139,9 @@ window.__ModuleLoader__.load({
 				ctx.slots.register(
 					{ name: "main", key: HOME.id, locale: NS, inject: () => ({
 						openConversation: () => ctx.layout.selectPanel(null),
-						openPanel: (id) => ctx.layout.selectPanel(id)
+						openPanel: (id) => ctx.layout.selectPanel(id),
+						// v3.16：新建工作项 = 回到今天的 TidyWork 会话（必要的话先建工作区 / 会话）
+						openTodayWork: () => openTodayWorkItem(ctx)
 					}) },
 					HomePage
 				)

@@ -7,8 +7,9 @@
 // 数据以 JSON 文件落在 DSH profile 数据目录（$DSH_HOME/profiles/<profile>/tidywork/），
 // 跨容器重建与跨会话存活。首次无文件时写入示例数据。不触碰 DSH 任何原生功能。
 import { readFile, writeFile, mkdir, rename, unlink } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 
 /** Cordis 插件名（loader 诊断用）。 */
@@ -30,10 +31,24 @@ function localStamp() {
 }
 
 /**
- * 计算 profile 数据目录：$DSH_HOME/profiles/<profile>/tidywork
- * DSH_HOME 缺省 ~/.dsh；profile 缺省 web（dsh web 即 --profile web）。
+ * 从插件自身安装路径推导 profile 目录（…/profiles/<profile>/node_modules/@tidywork/dsh-plugin/lib/index.js）。
+ * Desktop 启动 Host 时不会设置 DSH_PROFILE，仅靠环境变量会误落到 web profile，
+ * 因此优先用真实安装位置；匹配不到（如单文件调试）时返回 null。
+ */
+function profileDirFromModule() {
+  const parts = fileURLToPath(import.meta.url).split(sep);
+  const at = parts.lastIndexOf("profiles");
+  if (at < 0 || at + 1 >= parts.length) return null;
+  return parts.slice(0, at + 2).join(sep);
+}
+
+/**
+ * 计算 profile 数据目录：<profile>/tidywork
+ * 优先按插件安装位置推导；否则 $DSH_HOME/profiles/<DSH_PROFILE|web>。
  */
 function dataRoot() {
+  const derived = profileDirFromModule();
+  if (derived) return join(derived, "tidywork");
   const home = process.env.DSH_HOME || join(homedir(), ".dsh");
   const profile = process.env.DSH_PROFILE || "web";
   return join(home, "profiles", profile, "tidywork");
@@ -524,6 +539,10 @@ const WORKSPACE_PROMPT = {
     "## TidyWork 工作区",
     "本部署安装了 TidyWork 插件：DSH 侧边栏有「工作台 / 待办 / 会议 / 笔记」四块面板，数据以 JSON 存在本地，面板会在写入后立即刷新。",
     "当用户要新建待办、安排会议、记笔记（或把某件事记成待办）时，直接写入工作区数据，不要让用户自己去面板手动录。",
+    "## 这个会话里用户会做什么",
+    "这里通常是 TidyWork 的日常对话入口：用户抛出一件事，多半是要新建待办、安排会议、记笔记，也可能是调整已有的待办或会议。",
+    "归类默认值（不必每次反问）：出现时间、地点、参与人的 → 会议；一件要做的事 → 待办；零散想法、会议纪要、参考资料 → 笔记。拿不准就给一个默认归类并说明理由，让用户一句话纠正。",
+    "一句话里说了多件事就分开写多条；一次只问一个真正缺失的字段，不要连珠炮追问。",
     "写入方式：调用本工作区的 HTTP 接口（服务就跑在本容器 3080 端口，无鉴权）。请用 bash + curl，不要直接编辑 data/ 下的 JSON 文件——那会绕过串行写锁，可能写坏数据。",
     "接口与字段：",
     "- 待办 POST /tidywork-api/todos — title 必填；priority 取 high | mid | low（默认 mid）；category 默认「工作」；due 取 today | tomorrow | week | YYYY-MM-DD | none。",
@@ -533,7 +552,8 @@ const WORKSPACE_PROMPT = {
     "如果当前会话里也存在 tidywork_add_todo / tidywork_add_meeting / tidywork_add_note 工具，优先用工具；工具不在可用列表时就按上面的 curl 方式写入。",
     "写完后用一句话告诉用户「已写入工作区」并复述关键字段，不要粘贴整段 JSON。",
     "用户没给的字段不要编造：缺标题就先问，缺时间就按当天最接近的整点提示确认；一次只补齐真正必要的信息。",
-    "删除、修改已有条目由用户在插件面板操作，不要代替用户删除数据。",
+    "修改已有条目可以直接做：先 GET 读出清单，确认用户指的是哪一条，再局部更新——待办 PATCH /tidywork-api/todos/<id>（可改 title / priority / category / due / done）；会议 PATCH /tidywork-api/meetings/<id>；笔记 PUT /tidywork-api/notes/<id>（整条覆盖，content 必填）。改完把改动复述一遍让用户确认。",
+    "删除必须先问清楚是哪一条、确认之后才删（DELETE 同一个路径）。不要自己判断「这条应该没用了」就删。",
     "与工作项无关的话题按平常方式回答，不必主动提起本工作区。",
   ].join("\n"),
 };
