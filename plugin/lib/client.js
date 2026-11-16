@@ -2181,7 +2181,7 @@ window.__ModuleLoader__.load({
 
 			const toolbar = h(
 				"div",
-				{ style: { display: "flex", flexWrap: "wrap", gap: 2, padding: "6px 0 8px", borderBottom: "1px solid " + C.borderLight } },
+				{ "data-window-drag-exclude": true, style: { display: "flex", flexWrap: "wrap", gap: 2, padding: "6px 0 8px", borderBottom: "1px solid " + C.borderLight } },
 				(mode === "preview" || mode === "live" ? [] : [
 					{ label: "标题", run: () => applyPrefix("## ") },
 					{ label: "粗体", run: () => wrapSelection("**", "**", "加粗文字") },
@@ -2319,7 +2319,7 @@ window.__ModuleLoader__.load({
 				{ style: { display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" } },
 				h(
 					"div",
-					{ style: { padding: "18px 24px 0", flexShrink: 0 } },
+					{ "data-window-drag": true, style: { padding: "18px 24px 0", flexShrink: 0 } },
 					h(
 						"div",
 						{ style: { display: "flex", alignItems: "flex-start", gap: 6 } },
