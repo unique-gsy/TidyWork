@@ -35,9 +35,9 @@ for f in mac-linux/install-mac.sh mac-linux/uninstall-mac.sh \
 done
 
 # ---------- 2. 同步最新插件源码 ----------
-# ui/ 是面板 iframe 内嵌页面（index.html + app.css/app.js/base.css/tokens.css），
-# index.js 的 /tidywork-api/ui/<file> 路由按目录读取，必须随包一起带上。
-FILES="package.json cordis.patch.yml icon.svg locale/zh.json lib/client.js lib/index.js lib/types/index.d.ts lib/types/client/index.d.ts ui/index.html ui/app.css ui/base.css ui/tokens.css ui/app.js"
+# v3.30 起 ui/ 静态页已删除（真前端早就在 lib/client.js 里，ui/ 是没人引用的旧原型，
+# 而 package.json#files 又没带上，装完必然 404）。这里同步的文件必须和 package.json#files 保持一致。
+FILES="package.json cordis.patch.yml icon.svg locale/zh.json lib/client.js lib/index.js lib/types/index.d.ts lib/types/client/index.d.ts"
 for f in ${FILES}; do
   [ -f "${PLUGIN_SRC}/${f}" ] || fail "插件源码缺少 ${f}"
 done

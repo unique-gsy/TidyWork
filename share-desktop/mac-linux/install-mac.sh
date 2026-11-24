@@ -60,18 +60,23 @@ say "应用：${APP}"
 # 4) 插件放到固定位置（不留在下载目录，避免被清理后失效）
 mkdir -p "$HOME/.dsh/plugins" || fail "无法创建 $HOME/.dsh/plugins"
 mkdir -p "${STORE}" || fail "无法创建 ${STORE}"
+# 先清掉上一次装的代码目录，避免旧版本残留文件（比如已被删除的 ui/）继续被加载
+rm -rf "${STORE}/lib" "${STORE}/locale" "${STORE}/ui" || fail "无法清理 ${STORE} 旧文件"
 cp -R "${SRC}/." "${STORE}/" || fail "复制插件到 ${STORE} 失败"
 say "插件文件：${STORE}"
 
 # 5) 放进 profile 的 node_modules（插件零依赖，直接放即可被加载）
 NM="${PROFILE}/node_modules/@tidywork/dsh-plugin"
 mkdir -p "${NM}" || fail "无法创建 ${NM}"
+rm -rf "${NM}/lib" "${NM}/locale" "${NM}/ui" || fail "无法清理 ${NM} 旧文件"
 cp -R "${SRC}/." "${NM}/" || fail "复制插件到 ${NM} 失败"
 say "已就位：${NM}"
 
 # 6) 登记到 profile 的 package.json（备份后原地改写，保留已有插件）
 BAK="${PROFILE}/package.json.bak-$(date +%Y%m%d-%H%M%S)"
 cp "${PROFILE}/package.json" "${BAK}" || fail "备份 package.json 失败"
+# 备份只留最近 3 份：装几次就在 profile 里堆几个 .bak，越滚越大
+ls -1t "${PROFILE}"/package.json.bak-* 2>/dev/null | tail -n +4 | while read -r old; do rm -f "${old}"; done
 J=$(mktemp "${TMPDIR:-/tmp}/twpatch.XXXXXX.js") || fail "无法创建临时文件"
 cat > "${J}" <<'JS'
 const fs = require('fs')

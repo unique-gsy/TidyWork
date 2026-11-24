@@ -53,15 +53,21 @@ if (-not (Test-Path (Join-Path $profileDir 'package.json'))) { Fail ("配置目�
 if (-not (Test-Path (Join-Path $src 'lib\index.js'))) { Fail '压缩包不完整：缺少 plugin\lib\index.js。' }
 
 New-Item -ItemType Directory -Force -Path $store | Out-Null
+# 先清掉上一次装的代码目录，避免旧版本残留（例如已删除的 ui/）继续被加载
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $store 'lib'), (Join-Path $store 'locale'), (Join-Path $store 'ui')
 Copy-Item -Path (Join-Path $src '*') -Destination $store -Recurse -Force
 Say "插件文件：$store"
 
 New-Item -ItemType Directory -Force -Path $nm | Out-Null
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $nm 'lib'), (Join-Path $nm 'locale'), (Join-Path $nm 'ui')
 Copy-Item -Path (Join-Path $src '*') -Destination $nm -Recurse -Force
 Say "已就位：$nm"
 
 $bak = Join-Path $profileDir ('package.json.bak-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 Copy-Item (Join-Path $profileDir 'package.json') $bak
+# 备份只留最近 3 份，避免 profile 目录越滚越大
+Get-ChildItem -Path $profileDir -Filter 'package.json.bak-*' -File -ErrorAction SilentlyContinue |
+  Sort-Object LastWriteTime -Descending | Select-Object -Skip 3 | Remove-Item -Force -ErrorAction SilentlyContinue
 Say "已备份：$bak"
 
 $js = Join-Path $env:TEMP ('twpatch-' + [guid]::NewGuid().ToString('N') + '.js')

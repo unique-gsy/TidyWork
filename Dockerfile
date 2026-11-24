@@ -13,6 +13,8 @@ RUN sed -i "s|http://deb.debian.org/debian|http://mirrors.tuna.tsinghua.edu.cn/d
     && rm -rf /var/lib/apt/lists/*
 
 # 2) DSH 全局安装（npm 官方源可达时用默认源；慢可加 --registry=https://registry.npmmirror.com）
+# 版本钉死是"契约"不是随意挑的：插件用到的 webServer.register / slots / locale /
+# layout.selectPanel 都按 0.2.1-rc.5 的签名实现，换版要先跑 tests/server.test.mjs 回归。
 RUN npm install -g @deepseek-ai/dsh@0.2.1-rc.5 pnpm
 
 # 3) 应用代码：入口脚本 + TidyWork 插件组合包（装入 web profile，侧边栏新增「工作区」入口）

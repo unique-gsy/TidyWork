@@ -118,7 +118,11 @@ window.__ModuleLoader__.load({
 			"}",
 			"html[data-platform='darwin'] .tw-frame-page{padding-top:var(--dsh-frame-top-clearance,0px);}",
 			// v3.23：品牌 mark 交回宿主（原生 DeepSeek 图标），分隔线改为随主题一起注入
-			"nav[aria-label] > button[aria-label=\"插件\"]{margin-top:12px;border-top:1px solid var(--dsw-alias-border-l2,#e5e6eb);}"
+			"nav[aria-label] > button[aria-label=\"插件\"]{margin-top:12px;border-top:1px solid var(--dsw-alias-border-l2,#e5e6eb);}",
+			// 键盘可达：之前所有可点元素都没有焦点圈，纯键盘用户看不出当前在哪
+			"button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,a:focus-visible{outline:2px solid var(--tw-accent);outline-offset:2px;border-radius:6px;}",
+			".tw-check:focus-visible{outline:2px solid var(--tw-accent);outline-offset:3px;}",
+			"@media (prefers-reduced-motion:reduce){.tw-frame-page *{transition:none !important;animation:none !important;}}"
 		].join("");
 		const FONT = "'IBM Plex Sans', 'Familjen Grotesk', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif";
 		const PRIORITY = {
@@ -137,49 +141,13 @@ window.__ModuleLoader__.load({
 		function esc(s) {
 			return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 		}
-		// ===== 会话跳转（v3.5）：+新增/+新建 → 复用/新建固定命名会话 =====
-		const SESSION_KEYS = { todo: "tidywork.todoSessionId", meeting: "tidywork.meetingSessionId" };
-		const SESSION_NAMES = { todo: "新建待办事项", meeting: "新建会议管理" };
-
-		function findSessionRow(sid) {
-			return document.querySelector('div[data-row-key="session:' + sid + '"]');
-		}
-		function sessionRows() {
-			return [...document.querySelectorAll('div[data-row-key^="session:"]')];
-		}
-		function ensureSidebarOpen() {
-			const openBtn = document.querySelector('button[aria-label="打开侧边栏"]');
-			if (openBtn) { openBtn.click(); return true; }
-			return false;
-		}
-		function expandCollapsedSessions() {
-			const btn = [...document.querySelectorAll("button")].find((b) => (b.textContent || "").indexOf("展开其余") !== -1);
-			if (btn) btn.click();
-		}
-		function findComposer() {
-			return document.querySelector('[contenteditable="true"][aria-label*="描述你想要构建"]')
-				|| document.querySelector('[contenteditable="true"]')
-				|| document.querySelector("textarea")
-				|| document.querySelector('[role="textbox"]');
-		}
-		function sendToComposer(text) {
-			const ta = findComposer();
-			if (!ta) return false;
-			ta.focus();
-			try {
-				ta.dispatchEvent(new InputEvent("beforeinput", { inputType: "insertText", data: text, bubbles: true, cancelable: true }));
-			} catch (e) {}
-			// 编辑器异步渲染文本，延迟后再点发送
-			setTimeout(() => {
-				const btn = [...document.querySelectorAll("button")].find((b) => {
-					const t = (b.getAttribute("aria-label") || "") + (b.textContent || "");
-					return t.indexOf("发送消息") !== -1 || /send/i.test(b.getAttribute("aria-label") || "");
-				});
-				if (btn && !btn.disabled) btn.click();
-			}, 500);
-			return true;
-		}
+		// ===== 会话跳转（v3.30）：全部走宿主服务，不再抓 DOM =====
+		// 旧实现靠 aria-label「新建会话 / 打开侧边栏」+ contenteditable 点击 + 轮询 30s 找会话行：
+		// 宿主改文案、切英文界面或改布局就整体失效，还会往会话里塞一条锚定消息。
+		// 现在统一走 ctx.workspaces / ctx.uiWorkspace，拿不到服务时退回页内弹窗。
 		const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+		/** 宿主上下文：apply 时注入，页面里的「＋新建」用它打开今日会话。 */
+		let hostCtx = null;
 
 		// ===== v3.16：今日工作项会话 =====
 		// 「＋ 新建工作项」不再每次开一个新会话，而是回到 TidyWork 工作区里"今天"的那个会话：
@@ -257,13 +225,14 @@ window.__ModuleLoader__.load({
 			const listing = await ctx.uiWorkspace.listDirectory();
 			return await ctx.uiWorkspace.createDirectory(listing.home, "TidyWork");
 		}
-		/** 打开今天的 TidyWork 会话；没有就按 ①→②→③ 建出来。 */
-		async function openTodayWorkItem(ctx) {
+		/** 打开今天的 TidyWork 会话；没有就按 ①→②→③ 建出来。宿主服务不可用时退回页内弹窗。 */
+		async function openTodayWorkItem(ctx, fallback) {
 			try {
+				if (!ctx || !ctx.workspaces || !ctx.uiWorkspace) throw new Error("宿主会话服务不可用");
 				let ws = await findTidyWorkspace(ctx);
 				if (!ws) {
 					const dir = await ensureWorkspaceDir(ctx);
-					if (!dir) return;
+					if (!dir) throw new Error("没有可用的工作区目录");
 					ws = await ctx.workspaces.create({ path: dir });
 				}
 				const rec = readTodaySession();
@@ -277,72 +246,62 @@ window.__ModuleLoader__.load({
 				writeTodaySession(sid);
 				ctx.uiWorkspace.openSession(sid);
 			} catch (e) {
+				// 桌面端 web/容器等拿不到工作区服务时，不要让「＋新增」变成点了没反应：直接开页内弹窗
+				if (fallback) { fallback(); return; }
 				toast("打不开今日会话：" + ((e && e.message) || "未知错误"));
 			}
 		}
 
-		async function openTidySession(kind, fallback) {
-			// 1) 复用：已有固定命名会话 → 打开它
-			const sid = localStorage.getItem(SESSION_KEYS[kind]);
-			if (sid) {
-				let row = findSessionRow(sid);
-				if (!row) {
-					ensureSidebarOpen();
-					expandCollapsedSessions();
-					await sleep(400);
-					row = findSessionRow(sid);
-				}
-				if (row) { row.click(); return; }
-				localStorage.removeItem(SESSION_KEYS[kind]);
-			}
-			// 2) 新建：先展开侧边栏并收集发送前会话集合（排除既有会话，防误匹配）
-			ensureSidebarOpen();
-			await sleep(400);
-			const before = new Set(sessionRows().map((e) => e.getAttribute("data-row-key")));
-			const btn = document.querySelector('button[aria-label="新建会话"]');
-			if (!btn) { if (fallback) fallback(); return; }
-			btn.click();
-			let ta = null;
-			for (let i = 0; i < 25; i++) {
-				await sleep(200);
-				ta = findComposer();
-				if (ta) break;
-			}
-			if (!ta) { if (fallback) fallback(); return; }
-			// 3) 自动发送标题锚定消息（首条消息 = 会话名，DSH 标题由此生成）
-			sendToComposer(SESSION_NAMES[kind]);
-			// 5) 等固定命名会话行出现（发送后新增 + 标题含名称），记录 id 供复用
-			for (let i = 0; i < 60; i++) {
-				await sleep(500);
-				let rows = sessionRows();
-				if (rows.length === 0) { ensureSidebarOpen(); await sleep(300); rows = sessionRows(); }
-				if (rows.length === 0) { expandCollapsedSessions(); await sleep(300); rows = sessionRows(); }
-				const row = rows.find((r) => {
-					if (before.has(r.getAttribute("data-row-key"))) return false;
-					return (r.textContent || "").indexOf(SESSION_NAMES[kind]) !== -1;
-				});
-				if (row) {
-					const id = (row.getAttribute("data-row-key") || "").replace("session:", "");
-					if (id) localStorage.setItem(SESSION_KEYS[kind], id);
-					return;
-				}
-			}
+		/** 页面里的「＋新增」统一入口：优先回到今日会话，拿不到就退回弹窗。 */
+		async function openWorkItem(fallback) {
+			if (!hostCtx) { if (fallback) fallback(); return; }
+			await openTodayWorkItem(hostCtx, fallback);
 		}
 
 		/** 调用 /tidywork-api 路由（path 已含 /tidywork-api 前缀）：ok 时 resolve(data)，失败 reject(error)。
-		 *  失败时 error 上带 status / payload —— 笔记的 409 冲突要靠它区分"被别处改过"和普通失败。 */
+		 *  失败时 error 上带 status / payload —— 笔记的 409 冲突要靠它区分"被别处改过"和普通失败。
+		 *  v3.30：加 15s 超时；非 JSON 响应（登录过期回来的 HTML、网关错误页）转成人话，
+		 *  不再把 "Unexpected token '<'" 直接甩到 toast 上。 */
+		const API_TIMEOUT = 15000;
 		function api(path, opts) {
 			const init = Object.assign({ headers: { "Content-Type": "application/json" } }, opts || {});
-			return fetch(path, init)
-				.then((r) =>
-					r.json().then((j) => {
-						if (j && j.ok) return j.data;
-						const err = new Error((j && j.error) || "请求失败");
-						err.status = r.status;
-						err.payload = j && j.data;
-						throw err;
-					})
-				);
+			const ctrl = typeof AbortController === "function" ? new AbortController() : null;
+			let timer = null;
+			if (ctrl) {
+				init.signal = ctrl.signal;
+				timer = setTimeout(() => ctrl.abort(), API_TIMEOUT);
+			}
+			const settle = () => { if (timer) clearTimeout(timer); };
+			return fetch(path, init).then(
+				(r) => { settle(); return handle(r); },
+				(e) => { settle(); throw friendlyNetError(e); }
+			);
+		}
+		function friendlyNetError(e) {
+			if (e && (e.name === "AbortError" || e.code === 20)) {
+				const err = new Error("请求超时（15 秒未响应），请稍后重试");
+				err.status = 0;
+				return err;
+			}
+			const err = new Error("网络请求失败，请检查插件服务端是否在运行");
+			err.status = 0;
+			err.cause = e;
+			return err;
+		}
+		function handle(r) {
+			const type = String((r.headers && r.headers.get && r.headers.get("content-type")) || "");
+			if (type.indexOf("json") < 0) {
+				const err = new Error(r.status === 401 || r.status === 403 ? "没有权限访问工作区接口，请重新登录 DSH" : "工作区接口返回了非 JSON 内容（HTTP " + r.status + "）");
+				err.status = r.status;
+				throw err;
+			}
+			return r.json().then((j) => {
+				if (j && j.ok) return j.data;
+				const err = new Error((j && j.error) || "请求失败（HTTP " + r.status + "）");
+				err.status = r.status;
+				err.payload = j && j.data;
+				throw err;
+			});
 		}
 		let __toastTimer = null;
 		/** toast(msg, opts?)：opts.action 显示可点击动作（如"撤销"），点击触发 onAction 后立即隐藏。 */
@@ -420,6 +379,11 @@ window.__ModuleLoader__.load({
 			chipActive: { background: C.accentSoft, color: C.accent, borderColor: "transparent", fontWeight: 600 },
 			card: { background: C.main, border: "1px solid " + C.border, borderRadius: 8, overflow: "hidden" },
 			empty: { padding: 40, textAlign: "center", color: C.text2, background: "transparent", border: "1px dashed " + C.border, borderRadius: 8, fontSize: 13 },
+			// 接口异常横幅（加载失败时保留旧数据并提示，不伪装成"暂无数据"）
+			banner: { display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", marginBottom: 12, borderRadius: 6, border: "1px solid transparent", fontSize: 12.5, lineHeight: 1.5 },
+			bannerBtn: { marginLeft: "auto", flexShrink: 0, padding: "3px 10px", borderRadius: 5, border: "1px solid currentColor", background: "transparent", color: C.danger, fontSize: 12, cursor: "pointer", fontFamily: FONT },
+			// 行内文字操作按钮（替代裸 span，键盘可达 + 有 focus 圈）
+			linkBtn: { padding: "2px 4px", border: "none", background: "transparent", color: C.text2, fontSize: 11, cursor: "pointer", fontFamily: FONT, borderRadius: 4 },
 			input: { width: "100%", padding: "8px 10px", border: "1px solid " + C.border, borderRadius: 6, background: C.input, fontSize: 13, color: C.text0, outline: "none", boxSizing: "border-box", fontFamily: FONT },
 			select: { width: "100%", padding: "8px 10px", border: "1px solid " + C.border, borderRadius: 6, background: C.input, color: C.text0, fontSize: 13, boxSizing: "border-box", fontFamily: FONT },
 			btnGhost: { display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 6, border: "none", color: C.text1, fontSize: 13, cursor: "pointer", background: "transparent", fontFamily: FONT },
@@ -516,6 +480,62 @@ window.__ModuleLoader__.load({
 			if (s === shiftYmd(today, 1)) return base + " · 明天";
 			if (s < today) return base + " · 已逾期";
 			return base;
+		}
+
+		/** 把 due 归一成具体日期（与服务端 dueDateOf 同口径）；无期限返回 null。 */
+		function dueDateClient(due, today) {
+			const t = today || ymd(new Date());
+			const s = String(due == null ? "" : due);
+			if (!s || s === "none") return null;
+			if (s === "today") return t;
+			if (s === "tomorrow") return shiftYmd(t, 1);
+			if (s === "yesterday") return shiftYmd(t, -1);
+			if (s === "week") return weekRangeClient(t).end;
+			if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+			return null;
+		}
+		/** 本周区间（周一 ~ 周日）。 */
+		function weekRangeClient(day) {
+			const start = weekStartOf(day || ymd(new Date()));
+			return { start: start, end: shiftYmd(start, 6) };
+		}
+		/** 会议状态：有结束时间按区间判，没有就按"开始后 1 小时"算结束。 */
+		function meetingStatus(m) {
+			const date = String(m.date || "");
+			if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { status: "upcoming", statusText: "未开始" };
+			const start = new Date(date + "T" + String(m.startTime || m.time || "00:00") + ":00");
+			const endRaw = new Date(date + "T" + String(m.endTime || "") + ":00");
+			const end = isNaN(endRaw.getTime()) ? new Date(start.getTime() + 3600000) : endRaw;
+			const now = Date.now();
+			const status = now >= end.getTime() ? "done" : now >= start.getTime() ? "now" : "upcoming";
+			return { status, statusText: status === "done" ? "已结束" : status === "now" ? "进行中" : "未开始" };
+		}
+
+		/** 会议时间文本：优先结构化 startTime/endTime，老数据的 duration 自由文本兜底。 */
+		function meetingTimeText(m) {
+			const s = String(m.startTime || m.time || "");
+			const e = String(m.endTime || "");
+			if (s && e) return s + " - " + e;
+			if (s) return s;
+			return String(m.duration || "");
+		}
+
+		/** 导出全部数据为 JSON 备份（服务端已有 /export，之前没有任何入口能触发它）。 */
+		function exportAll() {
+			api("/tidywork-api/export")
+				.then((data) => {
+					const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+					const url = URL.createObjectURL(blob);
+					const a = document.createElement("a");
+					a.href = url;
+					a.download = "tidywork-" + ymd(new Date()) + ".json";
+					document.body.appendChild(a);
+					a.click();
+					a.remove();
+					setTimeout(() => URL.revokeObjectURL(url), 1000);
+					toast("已导出备份（JSON）");
+				})
+				.catch((e) => toast("导出失败：" + e.message));
 		}
 
 		function DuePicker(props) {
@@ -685,39 +705,51 @@ window.__ModuleLoader__.load({
 			const [editId, setEditId] = useState(null);
 			const [form, setForm] = useState({ title: "", priority: "mid", category: "工作", due: "today" });
 			const [hoverId, setHoverId] = useState(null);
-			const [confirmDel, setConfirmDel] = useState(null);
+			const [catOpen, setCatOpen] = useState(false);
+			const [catDraft, setCatDraft] = useState("");
 			const [q, setQ] = useState("");
 			const [sortBy, setSortBy] = useState("smart");
+			const [err, setErr] = useState(null);
 
 			const load = useCallback(() => {
-				let url = "/tidywork-api/todos?view=" + encodeURIComponent(view);
-				if (view === "category" && category) url += "&category=" + encodeURIComponent(category);
-				api(url).then(setItems).catch(() => {});
-				Promise.all(["all", "today", "week", "done"].map((v) => api("/tidywork-api/todos?view=" + v).then((d) => [v, d])))
-					.then((rs) => {
-						const pick = (v) => (rs.find((r) => r[0] === v) || [v, []])[1] || [];
-						const all = pick("all");
-						const today = pick("today");
-						const week = pick("week");
-						const done = pick("done");
-						const total = all.length + done.length;
-						const rate = total ? Math.round((done.length / total) * 100) : 0;
-						// 分类计数（8080 口径：仅未完成任务）；分类列表从全部数据推导，
-						// 使"新建分类"创建后自动出现在侧边栏分类区。
+				// v3.30：一次拉全量（view=all 现在真的返回全部），筛选/统计都在本地算——
+				// 旧实现发 5 个请求、还把 all(仅未完成)+done 拼起来，切换瞬间会出现重复行。
+				api("/tidywork-api/todos?view=all")
+					.then((list) => {
+						const all = Array.isArray(list) ? list : [];
+						const today = ymd(new Date());
+						const wk = weekRangeClient(today);
+						const doneList = all.filter((t) => t.done);
+						const weekDone = doneList.filter((t) => { const d = dueDateClient(t.due, today); return !!d && d >= wk.start && d <= wk.end; });
+						const weekOpen = all.filter((t) => { const d = dueDateClient(t.due, today); return !t.done && !!d && d >= wk.start && d <= wk.end; });
 						const catCounts = {};
 						all.forEach((t) => {
 							if (t.category) catCounts[t.category] = (catCounts[t.category] || 0) + 1;
 						});
-						const allItems = all.concat(done);
-						setStats({ all: total, today: today.length, week: week.length + done.length, done: done.length, statToday: today.length, statWeek: done.length, rate, catCounts, allItems });
+						setStats({
+							all: all.length,
+							today: all.filter((t) => dueDateClient(t.due, today) === today).length,
+							week: weekDone.length + weekOpen.length,
+							late: all.filter((t) => { const d = dueDateClient(t.due, today); return !t.done && !!d && d < today; }).length,
+							done: doneList.length,
+							weekDone: weekDone.length,
+							rate: all.length ? Math.round((doneList.length / all.length) * 100) : 0,
+							catCounts,
+							allItems: all
+						});
+						setItems(all);
+						setErr(null);
 					})
-					.catch(() => {});
-			}, [view, category]);
+					.catch((e) => {
+						// 静默失败会把"接口挂了"显示成"暂无待办"，这里保留旧数据 + 顶部提示
+						setErr((e && e.message) || "加载待办失败");
+					});
+			}, []);
 			useEffect(() => {
 				load();
 			}, [load]);
 
-			const titles = { all: "全部待办", today: "今天", week: "近日", done: "已完成", category: category || "分类" };
+			const titles = { all: "全部待办", today: "今天", week: "本周", late: "逾期", done: "已完成", category: category || "分类" };
 			const setViewTo = (v, cat) => {
 				setView(v);
 				setCategory(cat || "");
@@ -730,23 +762,27 @@ window.__ModuleLoader__.load({
 					})
 					.catch((e) => toast(e.message));
 			};
-			const remove = (id) => {
-				if (confirmDel !== id) {
-					setConfirmDel(id);
-					setTimeout(() => setConfirmDel((cur) => (cur === id ? null : cur)), 3000);
-					return;
-				}
-				setConfirmDel(null);
-				api("/tidywork-api/todos/" + id, { method: "DELETE" })
-					.then(() => {
-						toast("待办已删除");
+			const remove = (it) => {
+				// v3.30：直接删 + toast 撤销（原先是"点两次才算删"，既慢又容易误删）
+				api("/tidywork-api/todos/" + it.id, { method: "DELETE" })
+					.then((removed) => {
+						toast("已删除：" + it.title, {
+							action: "撤销",
+							onAction: () => {
+								const src = removed && removed.title ? removed : it;
+								api("/tidywork-api/todos", {
+									method: "POST",
+									body: JSON.stringify({ title: src.title, priority: src.priority, category: src.category, due: src.due, done: !!src.done })
+								}).then(load).catch((e) => toast(e.message));
+							}
+						});
 						load();
 					})
 					.catch((e) => toast(e.message));
 			};
 			const openAdd = () => {
-				// 用户要求：+新增 跳转到固定命名会话（新建待办事项），自然语言新增待办（复用）。
-				openTidySession("todo", () => {
+				// v3.30：统一下到 TidyWork 今日会话（自然语言建待办）；拿不到宿主服务时退回弹窗
+				openWorkItem(() => {
 					setEditId(null);
 					setForm({ title: "", priority: "mid", category: "工作", due: "today" });
 					setModal(true);
@@ -758,9 +794,16 @@ window.__ModuleLoader__.load({
 				setModal(true);
 			};
 			const newCategory = () => {
-				const name = prompt("请输入新分类名称：");
-				if (!name || !name.trim()) return;
-				setForm((f) => Object.assign({}, f, { category: name.trim() }));
+				// 不用 prompt()：桌面端各平台的原生输入框表现不一致，统一走自己的弹窗
+				setCatDraft("");
+				setCatOpen(true);
+			};
+			const commitCategory = () => {
+				const name = catDraft.trim().slice(0, 12);
+				if (!name) return;
+				setCatOpen(false);
+				setForm((f) => Object.assign({}, f, { category: name }));
+				setEditId(null);
 				setModal(true);
 			};
 			const save = () => {
@@ -813,9 +856,21 @@ window.__ModuleLoader__.load({
 			};
 			// —— 搜索：标题 / 分类 / 截止文案，大小写不敏感 ——
 			const kw = q.trim().toLowerCase();
-			const matched = kw
-				? items.filter((t) => (String(t.title || "") + " " + String(t.category || "") + " " + String(DUE_LABEL[t.due] || t.due || "")).toLowerCase().indexOf(kw) !== -1)
-				: items;
+			// v3.30：view 筛选从前端算（服务端只负责"全部"），口径与服务端 view 一致
+			const todayKey = ymd(new Date());
+			const wk = weekRangeClient(todayKey);
+			const inView = (t) => {
+				const d = dueDateClient(t.due, todayKey);
+				if (view === "done") return !!t.done;
+				if (view === "all") return true;
+				if (view === "today") return d === todayKey;
+				if (view === "late") return !t.done && !!d && d < todayKey;
+				if (view === "week") return !!d && d >= wk.start && d <= wk.end;
+				if (view === "category") return t.category === category;
+				return true;
+			};
+			const inQuery = (t) => (String(t.title || "") + " " + String(t.category || "") + " " + String(DUE_LABEL[t.due] || t.due || "")).toLowerCase().indexOf(kw) !== -1;
+			const matched = items.filter((t) => inView(t) && (!kw || inQuery(t)));
 			const sortedItems = matched.slice().sort(CMP[sortBy] || CMP.smart);
 			// 分类栏：固定三分类 + 数据中出现过的其他分类
 			const allItems = (stats && stats.allItems) || [];
@@ -857,6 +912,13 @@ window.__ModuleLoader__.load({
 					),
 					h(
 						"button",
+						{ style: Object.assign({}, S.menuItem, view === "late" && S.menuItemActive), onClick: () => setViewTo("late") },
+						h("svg", { style: Object.assign({}, S.menuIcon, view === "late" && S.menuIconActive), viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" }, h("path", { d: TODO_ICONS.clock })),
+						h("span", null, "逾期"),
+						h("span", { style: Object.assign({}, S.count, stats && stats.late ? { color: C.danger } : null) }, stats ? stats.late : 0)
+					),
+					h(
+						"button",
 						{ style: Object.assign({}, S.menuItem, view === "done" && S.menuItemActive), onClick: () => setViewTo("done") },
 						h("svg", { style: Object.assign({}, S.menuIcon, view === "done" && S.menuIconActive), viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" }, h("path", { d: TODO_ICONS.check })),
 						h("span", null, "已完成"),
@@ -889,13 +951,13 @@ window.__ModuleLoader__.load({
 							"div",
 							{ style: S.statCard },
 							h("div", { style: S.statLabel }, "今日待办"),
-							h("div", { style: Object.assign({}, S.statValue, { color: C.danger }) }, stats ? stats.statToday : 0)
+							h("div", { style: Object.assign({}, S.statValue, { color: C.danger }) }, stats ? stats.today : 0)
 						),
 						h(
 							"div",
 							{ style: S.statCard },
 							h("div", { style: S.statLabel }, "本周已完成"),
-							h("div", { style: Object.assign({}, S.statValue, { color: C.success }) }, stats ? stats.statWeek : 0)
+							h("div", { style: Object.assign({}, S.statValue, { color: C.success }) }, stats ? stats.weekDone : 0)
 						),
 						h(
 							"div",
@@ -916,6 +978,14 @@ window.__ModuleLoader__.load({
 						kw ? h("span", { style: { fontSize: 12, color: C.text2, marginRight: "auto", marginLeft: 10 } }, "匹配 " + sortedItems.length + " 条") : null,
 						h(Chip, { active: true, onClick: openAdd }, "+ 新增")
 					),
+					err
+						? h(
+								"div",
+								{ role: "alert", style: Object.assign({}, S.banner, { background: tint(C.danger, 10), color: C.danger, borderColor: tint(C.danger, 26) }) },
+								"接口异常：" + err + "（下方为上次加载的数据）",
+								h("button", { type: "button", style: S.bannerBtn, onClick: load }, "重试")
+							)
+						: null,
 					h(
 						"div",
 						{ style: { display: "flex", gap: 8, alignItems: "center", marginBottom: 12 } },
@@ -957,7 +1027,7 @@ window.__ModuleLoader__.load({
 										h("path", { d: TODO_ICONS.list })
 									),
 									h("div", { style: { fontSize: 14, fontWeight: 500, color: C.text1, marginBottom: 4 } }, "暂无待办"),
-									h("div", { style: { fontSize: 12, marginBottom: 16 } }, "点击下方按钮创建第一条待办"),
+									h("div", { style: { fontSize: 12, marginBottom: 16 } }, "点右上角「+ 新增」，或用右下角的语音按钮说一句话创建"),
 									h(Chip, { active: true, onClick: openAdd }, "+ 新增")
 								)
 							: sortedItems.map((it, idx) =>
@@ -971,11 +1041,27 @@ window.__ModuleLoader__.load({
 										},
 										it.done
 											? h(
-													"div",
-													{ title: "取消完成", style: { width: 20, height: 20, background: C.success, borderRadius: 6, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }, onClick: () => toggle(it.id, false) },
+													"button",
+													{
+														type: "button",
+														title: "取消完成",
+														"aria-label": "取消完成：" + it.title,
+														"aria-pressed": true,
+														className: "tw-check",
+														style: { width: 20, height: 20, background: C.success, border: "none", borderRadius: 6, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0 },
+														onClick: () => toggle(it.id, false)
+													},
 													h("svg", { width: 14, height: 14, viewBox: "0 0 24 24", fill: "none", stroke: C.onAccent, strokeWidth: 3, strokeLinecap: "round", strokeLinejoin: "round" }, h("polyline", { points: "20 6 9 17 4 12" }))
 												)
-											: h("div", { title: "标记完成", style: { width: 20, height: 20, border: "2px solid " + (PRIORITY[it.priority] || PRIORITY.mid).color, borderRadius: 6, flexShrink: 0, cursor: "pointer" }, onClick: () => toggle(it.id, true) }),
+											: h("button", {
+													type: "button",
+													title: "标记完成",
+													"aria-label": "标记完成：" + it.title,
+													"aria-pressed": false,
+													className: "tw-check",
+													style: { width: 20, height: 20, border: "2px solid " + (PRIORITY[it.priority] || PRIORITY.mid).color, background: "transparent", borderRadius: 6, flexShrink: 0, cursor: "pointer", padding: 0 },
+													onClick: () => toggle(it.id, true)
+												}),
 										h(
 											"div",
 											{ style: { flex: 1 } },
@@ -986,8 +1072,8 @@ window.__ModuleLoader__.load({
 												h("span", { style: { padding: "1px 6px", background: tint(C.danger, 12), color: (PRIORITY[it.priority] || PRIORITY.mid).color, borderRadius: 4, fontSize: 11 } }, (PRIORITY[it.priority] || PRIORITY.mid).label),
 												h("span", { style: { padding: "1px 6px", background: C.accentSoft, color: C.accent, borderRadius: 4, fontSize: 11 } }, esc(it.category || "")),
 												h("span", null, esc(DUE_LABEL[it.due] || it.due || "")),
-												h("span", { style: { color: C.text2, cursor: "pointer", fontSize: 11 }, onClick: () => openEdit(it) }, "编辑"),
-												h("span", { style: { color: confirmDel === it.id ? C.danger : C.text2, cursor: "pointer", fontSize: 11, fontWeight: confirmDel === it.id ? 600 : 400 }, onClick: () => remove(it.id) }, confirmDel === it.id ? "确认删除？" : "删除")
+												h("button", { type: "button", style: S.linkBtn, onClick: () => openEdit(it) }, "编辑"),
+												h("button", { type: "button", style: Object.assign({}, S.linkBtn, { color: C.danger }), onClick: () => remove(it) }, "删除")
 											)
 										)
 									)
@@ -1030,7 +1116,22 @@ window.__ModuleLoader__.load({
 						h(Btn, { onClick: () => { setModal(false); setEditId(null); } }, "取消"),
 						h(Btn, { primary: true, onClick: save }, editId ? "保存" : "创建")
 					)
+				),
+			h(
+				Modal,
+				{ open: catOpen, title: "新建分类", onClose: () => setCatOpen(false) },
+				h(
+					Field,
+					{ label: "分类名称" },
+					h("input", { style: S.input, maxLength: 12, autoFocus: true, placeholder: "例如 项目A / 读书", value: catDraft, onChange: (e) => setCatDraft(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") commitCategory(); } })
+				),
+				h(
+					"div",
+					{ style: S.footRow },
+					h(Btn, { onClick: () => setCatOpen(false) }, "取消"),
+					h(Btn, { primary: true, onClick: commitCategory }, "下一步")
 				)
+			)
 			);
 		}
 
@@ -1038,35 +1139,49 @@ window.__ModuleLoader__.load({
 		function MeetingsPage() {
 			const now0 = new Date();
 			const [month, setMonth] = useState(now0.getFullYear() + "-" + String(now0.getMonth() + 1).padStart(2, "0"));
-			const [byDay, setByDay] = useState({});
+			const [allMeets, setAllMeets] = useState([]);
 			const [dayView, setDayView] = useState(null);
 			const [modal, setModal] = useState(false);
 			const [editId, setEditId] = useState(null);
-			const [form, setForm] = useState({ title: "", date: "", time: "09:00", duration: "", location: "", participants: "1" });
+			const [err, setErr] = useState(null);
+			const [tick, setTick] = useState(0);
+			const [form, setForm] = useState({ title: "", date: "", start: "09:00", end: "10:00", location: "", participants: "1" });
 
-			const load = useCallback((m) => {
-				api("/tidywork-api/meetings?month=" + encodeURIComponent(m))
+			// v3.30：一次拿全量（月历、日视图、周条带共用一份），切月份不再重发请求，
+			// 也不会因为"只拉当月"导致跨月的那一周少算几天。
+			const load = useCallback(() => {
+				api("/tidywork-api/meetings")
 					.then((list) => {
-						const map = {};
-						const now = new Date();
-						(list || []).forEach((meet) => {
-							const day = parseInt(String(meet.date || "").slice(-2), 10);
-							const start = new Date(String(meet.date) + "T" + (meet.time || "00:00") + ":00");
-							const status = start.getTime() < now.getTime() - 3600000 ? "done" : start.getTime() < now.getTime() ? "now" : "upcoming";
-							(map[day] = map[day] || []).push(
-								Object.assign({}, meet, { status, statusText: status === "done" ? "已结束" : status === "now" ? "进行中" : "未开始" })
-							);
-						});
-						setByDay(map);
+						setAllMeets(Array.isArray(list) ? list : []);
+						setErr(null);
 					})
-					.catch(() => {});
+					.catch((e) => {
+						// 失败不伪装成"没有会议"：保留上次数据 + 顶部横幅
+						setErr((e && e.message) || "加载会议失败");
+					});
 			}, []);
 			useEffect(() => {
-				load(month);
-			}, [month, load]);
+				load();
+			}, [load]);
+			// 每 60 秒重算一次「进行中 / 已结束」（tick 触发重渲染，状态本身是纯函数算的）
+			useEffect(() => {
+				const timer = setInterval(() => setTick((t) => t + 1), 60000);
+				return () => clearInterval(timer);
+			}, []);
 
 			const [y, mon] = month.split("-").map(Number);
 			const monthTitle = y + "年" + mon + "月";
+			// 按天分组：只取当前月的会议，状态用 meetingStatus 现算（tick 变化即刷新）
+			const byDay = (() => {
+				const map = {};
+				allMeets.forEach((meet) => {
+					if (String(meet.date || "").slice(0, 7) !== month) return;
+					const day = Number(String(meet.date).slice(8, 10));
+					if (!day) return;
+					(map[day] = map[day] || []).push(Object.assign({}, meet, meetingStatus(meet)));
+				});
+				return map;
+			})();
 			const totalMeetings = Object.keys(byDay).reduce((n, d) => n + (byDay[d] || []).length, 0);
 
 			const today = new Date();
@@ -1088,11 +1203,11 @@ window.__ModuleLoader__.load({
 			const selectDate = (day) => setDayView(day);
 			const backToMonth = () => setDayView(null);
 			const openAdd = () => {
-				// 用户要求：+新建 跳转到固定命名会话（新建会议管理），自然语言新增会议（复用）。
-				openTidySession("meeting", () => {
+				// v3.30：统一下到 TidyWork 今日会话；拿不到宿主服务时退回弹窗
+				openWorkItem(() => {
 					const t = new Date();
-					const prefill = t.getFullYear() === y && t.getMonth() + 1 === mon ? t.toISOString().slice(0, 10) : y + "-" + String(mon).padStart(2, "0") + "-01";
-					setForm({ title: "", date: prefill, time: "09:00", duration: "", location: "", participants: "1" });
+					const prefill = t.getFullYear() === y && t.getMonth() + 1 === mon ? ymd(t) : y + "-" + String(mon).padStart(2, "0") + "-01";
+					setForm({ title: "", date: prefill, startTime: "09:00", endTime: "10:00", location: "", participants: "1" });
 					setModal(true);
 				});
 			};
@@ -1102,8 +1217,8 @@ window.__ModuleLoader__.load({
 				setForm({
 					title: m.title || "",
 					date: m.date || "",
-					time: m.time || "09:00",
-					duration: m.duration || "",
+					start: m.startTime || m.time || "09:00",
+					end: m.endTime || "",
 					location: m.location || "",
 					participants: String(m.participants == null ? 1 : m.participants)
 				});
@@ -1118,11 +1233,18 @@ window.__ModuleLoader__.load({
 					toast("请选择会议日期");
 					return;
 				}
+				// v3.30：改成结构化的 startTime / endTime，服务端按区间算状态（旧字段 time+duration 仅兼容读取）
+				const startTime = form.start || "09:00";
+				const endTime = form.end || "";
+				if (endTime && endTime <= startTime) {
+					toast("结束时间要晚于开始时间");
+					return;
+				}
 				const payload = {
 					title: form.title.trim(),
 					date: form.date,
-					time: form.time || "09:00",
-					duration: form.duration || "09:00 - 10:00",
+					startTime,
+					endTime,
 					location: form.location.trim() || "线上会议",
 					participants: parseInt(form.participants || "1", 10)
 				};
@@ -1137,7 +1259,7 @@ window.__ModuleLoader__.load({
 					// 日期改到别的月份时跟着跳过去，否则停在原地刷新
 					const m2 = String(payload.date).slice(0, 7);
 					if (m2 && m2 !== month) setMonth(m2);
-					else load(month);
+					load();
 				})
 					.catch((e) => toast(e.message));
 			};
@@ -1147,18 +1269,28 @@ window.__ModuleLoader__.load({
 					method: "POST",
 					body: JSON.stringify({ title: "会后跟进：" + m.title, due: m.date, category: "会议" })
 				})
-					.then((r) => {
-						const t = (r && r.data) || {};
+					.then((created) => {
+						// api() 已经直接返回资源对象，之前取 r.data 拿到的是 undefined
+						const t = created || {};
 						toast("已生成待办：" + (t.title || m.title));
+						load();
 					})
 					.catch((e) => toast(e.message));
 			};
-			const remove = (id) => {
-				if (!confirm("确认删除该会议？")) return;
-				api("/tidywork-api/meetings/" + id, { method: "DELETE" })
-					.then(() => {
-						toast("会议已删除");
-						load(month);
+			const remove = (m) => {
+				// 不用 confirm()：删完用 toast 撤销
+				api("/tidywork-api/meetings/" + m.id, { method: "DELETE" })
+					.then((removed) => {
+						const src = removed && removed.title ? removed : m;
+						toast("已删除：" + src.title, {
+							action: "撤销",
+							onAction: () =>
+								api("/tidywork-api/meetings", {
+									method: "POST",
+									body: JSON.stringify({ title: src.title, date: src.date, startTime: src.startTime || src.time, endTime: src.endTime, location: src.location, participants: src.participants })
+								}).then(() => load()).catch((e) => toast(e.message))
+						});
+						load();
 					})
 					.catch((e) => toast(e.message));
 			};
@@ -1192,7 +1324,7 @@ window.__ModuleLoader__.load({
 							h(
 								"div",
 								{ key: m.id, style: { fontSize: 11, padding: "1px 4px", borderRadius: 3, marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: m.status === "done" ? C.text2 : C.accent, background: m.status === "done" ? "transparent" : tint(C.accent, 10) } },
-								m.time + " " + m.title
+								String(m.startTime || m.time || "") + " " + m.title
 							)
 						),
 						meets.length > 2 && h("div", { style: { fontSize: 10, color: C.text2 } }, "+" + (meets.length - 2) + " 更多")
@@ -1206,16 +1338,18 @@ window.__ModuleLoader__.load({
 				const base = new Date(y, mon - 1, dayView);
 				const monday = new Date(base);
 				monday.setDate(base.getDate() - ((base.getDay() + 6) % 7));
+				// 这一周可能跨月：按真实日期筛，不能只看"几号"（否则 31 号和 1 号会撞在一起）
 				for (let i = 0; i < 7; i++) {
 					const dt = new Date(monday);
 					dt.setDate(monday.getDate() + i);
+					const dayKey = ymd(dt);
 					const d = dt.getDate();
-					const meets = byDay[d] || [];
-					const isSel = d === dayView;
+					const meets = allMeets.filter((m) => String(m.date || "").slice(0, 10) === dayKey).map((m) => Object.assign({}, m, meetingStatus(m)));
+					const isSel = dayKey === ymd(base);
 					strip.push(
 						h(
 							"div",
-							{ key: d, style: { padding: 8, borderRadius: 8, cursor: "pointer", textAlign: "center", background: isSel ? C.accentSoft : C.hover, border: isSel ? "1px solid " + C.accent : "1px solid transparent", boxSizing: "border-box" }, onClick: () => selectDate(d) },
+							{ key: dayKey, style: { padding: 8, borderRadius: 8, cursor: "pointer", textAlign: "center", background: isSel ? C.accentSoft : C.hover, border: isSel ? "1px solid " + C.accent : "1px solid transparent", boxSizing: "border-box" }, onClick: () => selectDate(d) },
 							h("div", { style: { fontSize: 11, color: C.text2, marginBottom: 2 } }, "周" + WEEK_DAYS[i]),
 							h("div", { style: { fontSize: 16, fontWeight: isSel ? 700 : 500, color: isSel ? C.accent : C.text0, marginBottom: 4 } }, d),
 							h("div", { style: { fontSize: 10, color: meets.length > 0 ? C.accent : C.text2 } }, meets.length > 0 ? meets.length + " 场" : "—")
@@ -1277,7 +1411,7 @@ window.__ModuleLoader__.load({
 											"div",
 											{ style: { flex: 1, textAlign: "left", minWidth: 0 } },
 											h("div", { style: { fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, it.m.title),
-											h("div", { style: { fontSize: 11, color: C.text2 } }, mon + "月" + it.day + "日 " + it.m.time)
+											h("div", { style: { fontSize: 11, color: C.text2 } }, mon + "月" + it.day + "日 " + meetingTimeText(it.m))
 										)
 									)
 								)
@@ -1286,6 +1420,14 @@ window.__ModuleLoader__.load({
 				h(
 					"div",
 					{ style: S.right },
+					err
+						? h(
+								"div",
+								{ role: "alert", style: Object.assign({}, S.banner, { background: tint(C.danger, 10), color: C.danger, borderColor: tint(C.danger, 26) }) },
+								"会议接口异常：" + err + "（下方为上次加载的数据）",
+								h("button", { type: "button", style: S.bannerBtn, onClick: load }, "重试")
+							)
+						: null,
 					dayView == null
 						? h(
 								"div",
@@ -1373,7 +1515,7 @@ window.__ModuleLoader__.load({
 													return h(
 														"div",
 														{ key: m.id, style: { position: "relative", marginBottom: 20, opacity: m.status === "done" ? 0.7 : 1 } },
-														h("div", { style: { position: "absolute", left: -60, top: 0, width: 50, textAlign: "right", fontSize: 12, color: m.status === "now" ? C.accent : C.text2, fontWeight: 500 } }, m.time),
+														h("div", { style: { position: "absolute", left: -60, top: 0, width: 50, textAlign: "right", fontSize: 12, color: m.status === "now" ? C.accent : C.text2, fontWeight: 500 } }, String(m.startTime || m.time || "")),
 														h("div", { style: { position: "absolute", left: -22, top: 4, width: 12, height: 12, borderRadius: "50%", background: dotColor, border: "2px solid " + C.main } }),
 														h(
 															"div",
@@ -1386,11 +1528,12 @@ window.__ModuleLoader__.load({
 																	"span",
 																	{ style: { display: "flex", gap: 8, alignItems: "center" } },
 																	h("span", { style: { fontSize: 11, padding: "2px 8px", background: badgeBg, color: badgeColor, borderRadius: 10 } }, m.statusText),
-																	h("span", { style: { fontSize: 11, color: C.accent, cursor: "pointer", marginRight: 10 }, onClick: () => openEdit(m) }, "编辑"),
-																	h("span", { style: { fontSize: 11, color: C.text2, cursor: "pointer" }, onClick: () => remove(m.id) }, "删除")
+																	h("button", { type: "button", style: Object.assign({}, S.linkBtn, { color: C.accent }), onClick: () => openEdit(m) }, "编辑"),
+																	h("button", { type: "button", style: Object.assign({}, S.linkBtn, { color: C.danger }), onClick: () => todoFromMeeting(m) }, "转待办"),
+																	h("button", { type: "button", style: Object.assign({}, S.linkBtn, { color: C.text2 }), onClick: () => remove(m) }, "删除")
 																)
 															),
-															h("div", { style: { fontSize: 12, color: C.text2, marginBottom: 12 } }, esc(m.duration) + " · " + esc(m.location)),
+															h("div", { style: { fontSize: 12, color: C.text2, marginBottom: 12 } }, esc(meetingTimeText(m)) + " · " + esc(m.location)),
 														 h(
 																"div",
 																{ style: { display: "flex", gap: 16, alignItems: "center", fontSize: 12, color: C.text1 } },
@@ -1436,12 +1579,12 @@ window.__ModuleLoader__.load({
 					h(
 						Field,
 						{ label: "开始时间" },
-						h("input", { style: S.input, type: "time", value: form.time, onChange: (e) => setForm((f) => Object.assign({}, f, { time: e.target.value })) })
+						h("input", { style: S.input, type: "time", value: form.start, onChange: (e) => setForm((f) => Object.assign({}, f, { start: e.target.value })) })
 					),
 					h(
 						Field,
-						{ label: "时长" },
-						h("input", { style: S.input, maxLength: 40, placeholder: "例如 09:00 - 10:00", value: form.duration, onChange: (e) => setForm((f) => Object.assign({}, f, { duration: e.target.value })) })
+						{ label: "结束时间" },
+						h("input", { style: S.input, type: "time", value: form.end, onChange: (e) => setForm((f) => Object.assign({}, f, { end: e.target.value })) })
 					),
 					h(
 						Field,
@@ -2339,14 +2482,27 @@ window.__ModuleLoader__.load({
 
 			const remove = () => {
 				if (!current) { toast("请先选择笔记"); return; }
-				if (!confirm("确认删除该笔记？")) return;
-				const id = current.id;
-				api("/tidywork-api/notes/" + id, { method: "DELETE" })
+				// v3.30：删完给撤销（确认框挡不住误操作，撤销才是真的兜底）
+				const gone = { title: current.title, content: content || "" };
+				const preview = (gone.content || "").slice(0, 20000);
+				api("/tidywork-api/notes/" + current.id, { method: "DELETE" })
 					.then(() => {
-						clearDraft(id);
+						clearDraft(current.id);
 						setDirty(false);
 						setCurrent(null);
-						toast("笔记已删除");
+						toast("已删除笔记：" + gone.title, {
+							action: "撤销",
+							onAction: () =>
+								api("/tidywork-api/notes", { method: "POST", body: JSON.stringify({ title: gone.title, content: preview }) })
+									.then((n) => {
+										api("/tidywork-api/notes").then((list) => {
+											setNotes(list || []);
+											if (n && n.id) loadNote(n.id);
+										}).catch(() => {});
+										toast("已恢复");
+									})
+									.catch((e) => toast("恢复失败：" + e.message))
+						});
 						api("/tidywork-api/notes").then((list) => {
 							setNotes(list || []);
 							if (list && list.length) loadNote(list[0].id);
@@ -2766,7 +2922,7 @@ window.__ModuleLoader__.load({
 				h("div", { style: { fontSize: 12, fontWeight: 600, margin: "10px 0 4px" } }, "会议"),
 				linkItems.meetings.length === 0
 					? h("div", { style: { fontSize: 11, color: C.text2 } }, "暂无会议")
-					: linkItems.meetings.map((it) => h("button", { key: it.id, type: "button", style: Object.assign({}, S.menuItem, { fontSize: 12.5 }), onClick: () => insertInternalLink("meeting", it) }, (it.date || "") + " " + (it.time || "") + " · " + it.title))
+					: linkItems.meetings.map((it) => h("button", { key: it.id, type: "button", style: Object.assign({}, S.menuItem, { fontSize: 12.5 }), onClick: () => insertInternalLink("meeting", it) }, (it.date || "") + " " + meetingTimeText(it) + " · " + it.title))
 			);
 
 			return h(
@@ -2846,25 +3002,24 @@ window.__ModuleLoader__.load({
 			const [narrow, setNarrow] = useState(typeof window !== "undefined" ? window.innerWidth < 780 : false);
 			const [err, setErr] = useState(null);
 			const today = ymd(new Date());
-			const month = today.slice(0, 7);
 
 			const reload = useCallback(() => {
 				const wrap = (p) => p.then((d) => ({ ok: true, d: d })).catch((e) => ({ ok: false, msg: (e && e.message) || "请求失败" }));
 				Promise.all([
+					// view=all 现在返回全部（含已完成），不再用 all+done 拼（拼起来会重复计数）
 					wrap(api("/tidywork-api/todos?view=all")),
-					wrap(api("/tidywork-api/todos?view=done")),
-					wrap(api("/tidywork-api/meetings?month=" + month)),
+					// 不传 month 拿全量会议：只拉当月会让"本周"跨月的会议漏掉
+					wrap(api("/tidywork-api/meetings")),
 					wrap(api("/tidywork-api/notes"))
-				]).then(([a, b, m, n]) => {
+				]).then(([a, m, n]) => {
 					const errs = {};
 					// 失败时保留上一次成功的数据，不把"加载失败"伪装成"没有数据"
-					if (a.ok && b.ok) setTodos((a.d || []).concat(b.d || []));
-					else errs.todos = !a.ok ? a.msg : b.msg;
+					if (a.ok) setTodos(a.d || []); else errs.todos = a.msg;
 					if (m.ok) setMeetings(m.d || []); else errs.meetings = m.msg;
 					if (n.ok) setNotes(n.d || []); else errs.notes = n.msg;
 					setErr(Object.keys(errs).length ? errs : null);
 				});
-			}, [month]);
+			}, []);
 			useEffect(() => { reload(); }, [reload]);
 			useEffect(() => {
 				const onResize = () => setNarrow(window.innerWidth < 780);
@@ -2887,16 +3042,19 @@ window.__ModuleLoader__.load({
 			const isLate = (t) => { const d = dueOf(t); return !t.done && !!d && dayDiff(today, d) > 0; };
 			const totalN = items.length;
 			const doneN = items.filter((t) => t.done).length;
-			const rate = totalN ? Math.round((doneN / totalN) * 100) : 0;
 			const todayCount = items.filter((t) => dueOf(t) === today).length;
 			const lateN = items.filter(isLate).length;
 			const openN = totalN - doneN;
 			const weekS = weekStartOf(today);
 			const weekE = shiftYmd(weekS, 6);
+			// 「本周进度」只算本周区间内的待办，不再拿全量完成率冒充本周
+			const weekItems = items.filter((t) => { const d = dueOf(t); return !!d && d >= weekS && d <= weekE; });
+			const weekDoneN = weekItems.filter((t) => t.done).length;
+			const weekRate = weekItems.length ? Math.round((weekDoneN / weekItems.length) * 100) : 0;
 			const weekMeets = (meetings || []).filter((m) => { const d = String(m.date || "").slice(0, 10); return d >= weekS && d <= weekE; });
 			const todayMeets = (meetings || [])
 				.filter((m) => String(m.date || "").slice(0, 10) === today)
-				.sort((a, b) => String(a.time || "").localeCompare(String(b.time || "")));
+				.sort((a, b) => String(a.startTime || a.time || "").localeCompare(String(b.startTime || b.time || "")));
 			// 接口返回已按「置顶优先、最后编辑倒序」排序，取前 4 条即最近笔记；
 			// 之前写成 slice(-4).reverse() 取的是列表末尾（最旧）4 条，笔记一多就会显示旧笔记。
 			const recentNotes = (notes || []).slice(0, 4);
@@ -2904,10 +3062,22 @@ window.__ModuleLoader__.load({
 			// —— 今日日程：视图范围与块几何（默认 09:00–18:00，有越界会议时向外扩展） ——
 			const evBlocks = (() => {
 				const bs = todayMeets.map((m) => {
-					const p = String(m.time || "0:0").split(":");
-					const start = Number(p[0] || 0) + Number(p[1] || 0) / 60;
-					const mm = String(m.duration || "").match(/(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/);
-					const end = mm ? Number(mm[3]) + Number(mm[4]) / 60 : start + 1;
+					const toMin = (txt) => {
+						const p = String(txt || "").split(":");
+						const hh = Number(p[0]);
+						const mm = Number(p[1]);
+						return isNaN(hh) || isNaN(mm) ? null : hh + mm / 60;
+					};
+					const startMin = toMin(m.startTime || m.time);
+					const start = startMin == null ? 0 : startMin;
+					const endMin = toMin(m.endTime);
+					// 老数据还可能只有 duration 自由文本，兜底解析一次；都没有就按 1 小时
+					let end = endMin;
+					if (end == null) {
+						const mm = String(m.duration || "").match(/(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/);
+						end = mm ? Number(mm[3]) + Number(mm[4]) / 60 : start + 1;
+					}
+					if (end <= start) end = start + 1;
 					// visEnd = 画面上真正占到的位置：短会（15/30 分钟）受最小块高限制，视觉上会比真实时长更高，
 					// 重叠/分栏必须按这个算，否则相邻两场会各画一块、下压上一块。
 					const visEnd = Math.max(end, start + TL_BLOCK_MIN / TL_HOUR);
@@ -2982,7 +3152,7 @@ window.__ModuleLoader__.load({
 						setTodos((cur) => (cur || []).map((x) => (x.id === id ? Object.assign({}, x, { done: !!done }) : x)));
 						if (done) toast("已完成：" + (title || ""), { action: "撤销", onAction: () => setDone(id, false) });
 						else toast("已恢复未完成");
-						load();
+						reload();
 					})
 					.catch((e) => toast(e.message));
 			};
@@ -2992,8 +3162,9 @@ window.__ModuleLoader__.load({
 				if (!title) { toast("请输入待办内容"); return; }
 				api("/tidywork-api/todos", { method: "POST", body: JSON.stringify({ title, priority: "mid", category: "工作", due: addDue || "today" }) })
 					.then((created) => {
-						const item = created && created.id ? created : { id: "tw" + Date.now(), title, priority: "mid", category: "工作", due: addDue || "today", done: false };
-						setTodos((cur) => (cur || []).concat([Object.assign({ done: false }, item)]));
+						// 服务端没回实体就重新拉一次，绝不造一个假 id（假 id 会让"勾选完成"打到 404）
+						if (created && created.id) setTodos((cur) => (cur || []).concat([created]));
+						else reload();
 						setDraft("");
 						setAddDue("today");
 						toast("已添加：" + title);
@@ -3064,7 +3235,7 @@ window.__ModuleLoader__.load({
 							{
 								key: "ev" + i,
 								onClick: () => setOpenEv(on ? null : b.m.id),
-								title: b.m.title + "（" + (b.m.duration || b.m.time) + "）",
+								title: b.m.title + "（" + meetingTimeText(b.m) + "）",
 								style: {
 									position: "absolute", left: lx, width: w, top, height: h2, boxSizing: "border-box",
 									textAlign: "left", cursor: "pointer", fontFamily: FONT,
@@ -3074,13 +3245,13 @@ window.__ModuleLoader__.load({
 								}
 							},
 							h("div", { style: { fontSize: compact ? 11.5 : 12, fontWeight: 600, color: C.accent, display: "flex", gap: 6, lineHeight: compact ? 1.2 : 1.35 } },
-								h("span", { style: { flexShrink: 0 } }, b.m.time),
+								h("span", { style: { flexShrink: 0 } }, String(b.m.startTime || b.m.time || "")),
 								h("span", { style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, b.m.title),
 								over ? h("span", { style: { flexShrink: 0, fontSize: 10, fontWeight: 500, color: "#8a93a6", background: "#eef1f6", borderRadius: 4, padding: "0 4px", lineHeight: "15px" } }, b.start < TL_START ? "早于视图" : "晚于视图") : null
 							),
 							compact ? null : h("div", { style: { fontSize: 11, color: C.text1, marginTop: 1, display: "flex", gap: 8, flexWrap: "wrap", lineHeight: 1.3 } },
 								h("span", null, b.m.location || ""), h("span", null, (b.m.participants || 0) + " 人")),
-							(on && !compact) ? h("div", { style: { fontSize: 11, color: C.text1, marginTop: 4, paddingTop: 4, borderTop: "1px dashed #b9cdff" } }, (b.m.duration || "") + " · 点击「会议」查看完整信息") : null
+							(on && !compact) ? h("div", { style: { fontSize: 11, color: C.text1, marginTop: 4, paddingTop: 4, borderTop: "1px dashed #b9cdff" } }, meetingTimeText(b.m) + " · 点击「会议」查看完整信息") : null
 						)
 					);
 				});
@@ -3166,7 +3337,8 @@ window.__ModuleLoader__.load({
 								style: Object.assign({}, S.btnPrimary, { display: "flex", alignItems: "center", gap: 5 })
 							},
 							"＋ 新建工作项"
-						)
+						),
+						h("button", { type: "button", onClick: exportAll, title: "导出全部数据为 JSON 备份", style: S.btnGhost }, "导出")
 					)
 				),
 
@@ -3347,18 +3519,18 @@ window.__ModuleLoader__.load({
 									h(
 										"div",
 										{ style: { display: "flex", alignItems: "baseline", gap: 8 } },
-										h("div", { style: { fontSize: 46, fontWeight: 600, letterSpacing: "-0.045em", lineHeight: 1 } }, String(rate)),
+										h("div", { style: { fontSize: 46, fontWeight: 600, letterSpacing: "-0.045em", lineHeight: 1 } }, String(weekRate)),
 										h("span", { style: { fontSize: 12, color: C.text2 } }, "% 完成")
 									),
 									h(
 										"div",
 										{ style: { position: "relative", height: 2, background: C.border, flexShrink: 0 } },
-										h("div", { style: { position: "absolute", left: 0, top: 0, height: 2, width: rate + "%", background: C.accent, transition: "width .4s ease" } })
+										h("div", { style: { position: "absolute", left: 0, top: 0, height: 2, width: weekRate + "%", background: C.accent, transition: "width .4s ease" } })
 									),
 									h(
 										"div",
 										{ style: { display: "flex", flexDirection: "column", gap: 7 } },
-										h("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 12 } }, h("span", { style: { color: C.text1 } }, "已完成 / 全部"), h("span", { style: { fontWeight: 600 } }, doneN + " / " + totalN)),
+										h("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 12 } }, h("span", { style: { color: C.text1 } }, "本周已完成 / 本周待办"), h("span", { style: { fontWeight: 600 } }, weekDoneN + " / " + weekItems.length)),
 										h("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 12 } }, h("span", { style: { color: C.text1 } }, "今天待办"), h("span", { style: { fontWeight: 600 } }, todayCount + " 条")),
 										h("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 12 } }, h("span", { style: { color: C.text1 } }, "逾期未完成"), h("span", { style: { fontWeight: 600, color: lateN ? C.danger : C.text0 } }, lateN + " 条")),
 										h("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 12 } }, h("span", { style: { color: C.text1 } }, "本周会议"), h("span", { style: { fontWeight: 600 } }, weekMeets.length + " 场"))
@@ -3473,11 +3645,15 @@ window.__ModuleLoader__.load({
 
 		/** 应用主体：工作台主面板 + 3 组侧边栏入口/主面板（品牌保持宿主原样）。 */
 		function apply(ctx) {
+			// 让页面里的「＋ 新增」能拿到宿主服务（工作区 / 会话 / 布局）
+			hostCtx = ctx;
 			// 主题与 Markdown 样式注入（跟随页面生命周期）
 			ctx.effect(() => applyBranding(), "tidywork: branding");
 
-			const dict = { home: "工作台", todos: "待办", meetings: "会议", notes: "笔记" };
-			ctx.effect(() => ctx.locale.register(NS, { zh: dict, en: dict }), "tidywork: locale");
+			// 中文 / 英文各一份：之前 en 直接复用中文 dict，英文环境会冒出中文标签
+			const dictZh = { home: "工作台", todos: "待办", meetings: "会议", notes: "笔记" };
+			const dictEn = { home: "Workboard", todos: "Todos", meetings: "Meetings", notes: "Notes" };
+			ctx.effect(() => ctx.locale.register(NS, { zh: dictZh, en: dictEn }), "tidywork: locale");
 			const t = ctx.locale.bind(NS);
 			const pages = { todos: TodosPage, meetings: MeetingsPage, notes: NotesPage };
 
@@ -3515,10 +3691,33 @@ window.__ModuleLoader__.load({
 				);
 			}
 
-			// —— 默认打开工作台主面板 ——
+			// —— 恢复上次停留的面板（首次安装才落回工作台） ——
+			// 之前每次启动都无条件 selectPanel(HOME)，用户停在"笔记"里一刷新就被弹回首页。
+			const LAST_PANEL_KEY = "tidywork:lastPanel";
+			const validPanels = [HOME.id].concat(PANELS.map((p) => p.id));
+			const rememberPanel = (id) => {
+				try { localStorage.setItem(LAST_PANEL_KEY, id || HOME.id); } catch (e) { /* 隐私模式忽略 */ }
+			};
+			ctx.effect(() => {
+				// panelInfo 是 ObservableSnapshot：getSnapshot() + subscribe(fn)（宿主 ui-layout 的稳定契约）
+				const src = ctx.layout && ctx.layout.panelInfo;
+				if (!src || !src.subscribe) return () => {};
+				const read = () => {
+					try {
+						const snap = src.getSnapshot ? src.getSnapshot() : null;
+						const id = snap && snap.activePanelId;
+						if (id && validPanels.indexOf(id) !== -1) rememberPanel(id);
+					} catch (e) { /* 快照读取失败不影响主流程 */ }
+				};
+				read();
+				return src.subscribe(read);
+			}, "tidywork: remember-panel");
+
 			setTimeout(() => {
+				let want = HOME.id;
+				try { const saved = localStorage.getItem(LAST_PANEL_KEY); if (saved && validPanels.indexOf(saved) !== -1) want = saved; } catch (e) { /* ignore */ }
 				try {
-					ctx.layout.selectPanel(HOME.id);
+					ctx.layout.selectPanel(want);
 				} catch (e) {
 					/* layout 未就绪则保持 DSH 默认对话页 */
 				}
