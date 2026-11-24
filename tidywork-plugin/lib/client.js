@@ -225,6 +225,56 @@ window.__ModuleLoader__.load({
 			const listing = await ctx.uiWorkspace.listDirectory();
 			return await ctx.uiWorkspace.createDirectory(listing.home, "TidyWork");
 		}
+		/** 会话快照（byId），拿不到就返回空对象——只用来读标题，不该因为快照没加载就报错。 */
+		function sessionIndex(ctx) {
+			try {
+				const snap = ctx.sessions && ctx.sessions.list && ctx.sessions.list.getSnapshot();
+				return (snap && snap.byId) || {};
+			} catch (e) {
+				return {};
+			}
+		}
+		/** 给会话改名（宿主 rename 走 workspaceOperation 通道，和它自己重命名弹窗同一个入口）。 */
+		async function renameSessionTo(ctx, id, title) {
+			if (!ctx.sessions || !ctx.sessions.using) throw new Error("宿主会话服务不可用");
+			const res = await ctx.sessions.using(id, { source: "workspaceOperation" }, (ref) => ref.binding.session.rename(title));
+			if (res && res.ok === false) throw new Error((res.error && res.error.message) || "会话改名失败");
+		}
+		/**
+		 * TidyWork 工作区里"今天"的会话：标题就是 yyyy-mm-dd。
+		 * 先按标题找（跨天/换机器后 localStorage 可能丢，标题才是真依据），再按本地记录找；
+		 * 都没有就新建一个并改名，然后把 id 记下来。
+		 */
+		async function ensureTodaySession(ctx, ws, today) {
+			const ids = Array.isArray(ws.sessionIds) ? ws.sessionIds : [];
+			const byId = sessionIndex(ctx);
+			const titled = ids.find((id) => byId[id] && String(byId[id].title || "").trim() === today);
+			if (titled) {
+				writeTodaySession(titled);
+				return titled;
+			}
+			const rec = readTodaySession();
+			if (rec && rec.d === today && ids.indexOf(rec.id) !== -1) return rec.id;
+			// 一律用 connectWorkspace：它只在指定工作区里建/复用空白会话；
+			// sessions.create 会跨工作区复用"空白会话"，容易把别处的草稿连工作区一起拖过来。
+			let sid = null;
+			try {
+				sid = await ctx.uiWorkspace.connectWorkspace(ws.workspaceId);
+			} catch (e) {
+				if (ctx.sessions && typeof ctx.sessions.create === "function") {
+					sid = await ctx.sessions.create({ workspaceId: ws.workspaceId });
+				} else {
+					throw e;
+				}
+			}
+			try {
+				await renameSessionTo(ctx, sid, today);
+			} catch (e) {
+				console.warn("[tidywork] 今日会话改名失败：", (e && e.message) || e);
+			}
+			writeTodaySession(sid);
+			return sid;
+		}
 		/** 打开今天的 TidyWork 会话；没有就按 ①→②→③ 建出来。宿主服务不可用时退回页内弹窗。 */
 		async function openTodayWorkItem(ctx, fallback) {
 			try {
@@ -235,21 +285,57 @@ window.__ModuleLoader__.load({
 					if (!dir) throw new Error("没有可用的工作区目录");
 					ws = await ctx.workspaces.create({ path: dir });
 				}
-				const rec = readTodaySession();
 				const today = ymdLocal(new Date());
-				// 只有"日期是今天"且"会话仍在这个工作区里"才算命中——昨天那个会话今天又被翻动，不该复用
-				if (rec && rec.d === today && Array.isArray(ws.sessionIds) && ws.sessionIds.indexOf(rec.id) !== -1) {
-					ctx.uiWorkspace.openSession(rec.id);
-					return;
-				}
-				const sid = await ctx.uiWorkspace.connectWorkspace(ws.workspaceId);
-				writeTodaySession(sid);
+				const sid = await ensureTodaySession(ctx, ws, today);
 				ctx.uiWorkspace.openSession(sid);
 			} catch (e) {
 				// 桌面端 web/容器等拿不到工作区服务时，不要让「＋新增」变成点了没反应：直接开页内弹窗
 				if (fallback) { fallback(); return; }
 				toast("打不开今日会话：" + ((e && e.message) || "未知错误"));
 			}
+		}
+
+		/**
+		 * 宿主的「新会话」按钮不属于插件，但它最终调的是 ctx.uiWorkspace.startSession()：
+		 * 不指定工作区时宿主会落到"当前/最近的工作区"——也就是 TidyWork，普通对话被混进工作项里。
+		 * 这里包一层：不指定工作区的「新会话」改为开一个不属于任何工作区的普通会话（宿主默认目录），
+		 * 于是「新会话」= DSH 普通会话，「＋ 新建工作项」= TidyWork 的 yyyy-mm-dd 会话，两边分开。
+		 * 显式传 workspaceId 的调用原样放行；需要预填草稿的入口（首屏"开始任务"等）也不接管。
+		 */
+		function installNewSessionRouting(ctx) {
+			const uw = ctx.uiWorkspace;
+			if (!uw || typeof uw.startSession !== "function") return () => {};
+			if (uw.__tidyworkRouted) return () => {};
+			const orig = uw.startSession;
+			const startPlain = (options) => {
+				Promise.resolve()
+					.then(() => {
+						if (!ctx.sessions || typeof ctx.sessions.create !== "function") throw new Error("宿主会话服务不可用");
+						return ctx.sessions.create({});
+					})
+					.then((id) => {
+						if (!id) throw new Error("宿主没有返回新会话");
+						ctx.uiWorkspace.openSession(id);
+					})
+					.catch((e) => {
+						// 老宿主/降级环境：退回宿主原行为，至少不会点了没反应
+						console.warn("[tidywork] 普通会话创建失败，退回宿主默认：", (e && e.message) || e);
+						orig.call(uw, undefined, options);
+					});
+			};
+			const patched = function (workspaceId, options) {
+				if (workspaceId !== undefined) return orig.call(uw, workspaceId, options);
+				if (options && (options.prompt !== undefined || options.agentPreset !== undefined)) {
+					return orig.call(uw, undefined, options);
+				}
+				startPlain(options);
+			};
+			uw.startSession = patched;
+			uw.__tidyworkRouted = true;
+			return () => {
+				if (uw.startSession === patched) uw.startSession = orig;
+				delete uw.__tidyworkRouted;
+			};
 		}
 
 		/** 页面里的「＋新增」统一入口：优先回到今日会话，拿不到就退回弹窗。 */
@@ -3643,6 +3729,8 @@ window.__ModuleLoader__.load({
 		function apply(ctx) {
 			// 让页面里的「＋ 新增」能拿到宿主服务（工作区 / 会话 / 布局）
 			hostCtx = ctx;
+			// 「新会话」落默认工作区、「新建工作项」落 TidyWork 当天会话：两个入口分开
+			ctx.effect(() => installNewSessionRouting(ctx), "tidywork: new-session-routing");
 			// 主题与 Markdown 样式注入（跟随页面生命周期）
 			ctx.effect(() => applyBranding(), "tidywork: branding");
 

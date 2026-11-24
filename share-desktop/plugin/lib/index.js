@@ -18,6 +18,7 @@
 //   8) 日志统一进 tidywork/logs/ 并做 1MB 轮转；调试产物不再散落数据目录。
 // 数据以 JSON 文件落在 DSH profile 数据目录（$DSH_HOME/profiles/<profile>/tidywork/），
 // 跨容器重建与跨会话存活。首次无文件时空白起步。不触碰 DSH 任何原生功能。
+import { readFileSync } from "node:fs";
 import { readFile, writeFile, mkdir, rename, unlink } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
 import { homedir } from "node:os";
@@ -26,8 +27,15 @@ import { randomBytes } from "node:crypto";
 
 /** Cordis 插件名（loader 诊断用）。 */
 const name = "tidywork";
-/** 插件版本：与 package.json 对齐，health 路由会回给前端做自检。 */
-const VERSION = "3.30.0";
+/** 插件版本：直接读 package.json，避免手改常量后和安装包版本对不上。 */
+const VERSION = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"));
+    return String(pkg.version || "0.0.0");
+  } catch (error) {
+    return "0.0.0";
+  }
+})();
 /**
  * 依赖宿主服务：
  *  - webServer 提供 HTTP 路由注册；

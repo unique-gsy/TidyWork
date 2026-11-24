@@ -8,6 +8,7 @@
 - **工作区数据**：插件服务端半注册 `/tidywork-api` 路由（DSH webServer），数据以 JSON 落盘 DSH profile 数据目录，跨容器/会话存活
 - **部署**：单容器（Docker / OrbStack），`docker-compose.yml` 一个文件分享给任何人
 
+> v3.30.1 变更：把「新会话」和「＋ 新建工作项」彻底分开——「新会话」接管宿主 `ctx.uiWorkspace.startSession()`（仅限没指定工作区、没预填草稿的调用），改为开一个不属于任何工作区的普通 DSH 会话，不再落进 TidyWork；「＋ 新建工作项」走 `connectWorkspace` 在 TidyWork 工作区里建当天会话并把标题改成 `yyyy-mm-dd`，当天已存在（按标题判定）就复用同一个。
 > v3.30 变更（安全与稳定性整改）：① `/tidywork-api` 全部写操作加来源校验（Host 白名单 + Origin 同源 + `Sec-Fetch-Site`，写请求必须 `application/json`，挡掉网页 CSRF）；② 错误统一分码（400/403/404/413/415/409/500），字段超长不再静默截断而是明确 400；③ `view` 口径重做（`all` 真正返回全部、`today/week/late/category` 统一按 due 归一日期算），客户端改为"一次拉全量 + 本地筛选"，切换视图不再闪重复行；④ 会议时间改结构化 `startTime/endTime`（仍兼容老 `time`+`duration`），状态按起止区间判定并每分钟重算；⑤ 笔记正文拆到 `notes/<id>.json`，`notes.json` 只留索引并自动迁移，列表不再把全文权重读进内存；⑥ 附件按引用回收 + 32 位 hex 文件名 + `private` 缓存；⑦ 新增 `/health`、`/export`（客户端顶栏「导出」）；⑧ 日志落 `logs/plugin.log` 并按 1MB 轮转；⑨ 客户端去掉 DOM 抓会话/"点两次才算删"的策略，改为 toast 撤销；⑩ 补齐键盘可达（焦点圈、按钮语义）、启动记住上次面板、英文 locale。
 > v3.7 变更：已移除原 8080 FastAPI 桥接后端与静态前端、移除插件「工作看板」板块，仅保留 DSH web（3080）+ TidyWork 插件。
 > v3.8 变更：工作台从「三卡概览 + 快捷入口条」重构为「一屏工作台」（时间轴 + 可勾选待办 + 进度环 + 本周节奏），见 `docs/workbench-redesign/`。
