@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="TidyWork 四个面板的前端重设计演示：工作台、待办、会议、笔记。演示数据只保存在本机浏览器。">
+<title>TidyWork</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@500;600&family=IBM+Plex+Sans:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="base.css">
+<link rel="stylesheet" href="app.css">
+<style>
+body.embed .shell { display: none; }
+body.embed .panel { padding-top: 20px; }
+body.embed { background: var(--color-paper); }
+body.embed .demo-note { display: none; }
+</style>
+</head>
+<body>
+<a class="skip" href="#panel">跳到当前面板</a>
+
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></symbol>
+  <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2 14 14"/></symbol>
+  <symbol id="i-chev-left" viewBox="0 0 16 16"><path d="M10 3 5 8l5 5"/></symbol>
+  <symbol id="i-chev-right" viewBox="0 0 16 16"><path d="M6 3l5 5-5 5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 16 16"><path d="M3 8.5 6.5 12 13 4.5"/></symbol>
+  <symbol id="i-close" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 16 16"><rect x="2.5" y="4" width="11" height="9.5"/><path d="M2.5 7.5h11M5.5 2v4M10.5 2v4"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.6"/><path d="M8 4.6V8l2.4 1.6"/></symbol>
+  <symbol id="i-note" viewBox="0 0 16 16"><rect x="3" y="2.5" width="10" height="11"/><path d="M5.4 6h5.2M5.4 8.6h5.2M5.4 11.2h3"/></symbol>
+  <symbol id="i-list" viewBox="0 0 16 16"><path d="M5.5 4.5h8M5.5 8h8M5.5 11.5h8M2.6 4.5h.01M2.6 8h.01M2.6 11.5h.01"/></symbol>
+  <symbol id="i-star" viewBox="0 0 16 16"><path d="M8 2.8l1.7 3.5 3.8.5-2.8 2.7.7 3.8-3.4-1.8-3.4 1.8.7-3.8-2.8-2.7 3.8-.5z"/></symbol>
+</svg>
+
+<header class="shell">
+  <div class="shell-inner">
+    <div class="brand">
+      <span class="wordmark">TidyWork</span>
+      <span class="brand-tag">工作区</span>
+    </div>
+    <nav class="switcher" aria-label="面板切换">
+      <button class="tab" type="button" data-view="home" aria-current="page">工作台</button>
+      <button class="tab" type="button" data-view="todos">待办</button>
+      <button class="tab" type="button" data-view="meetings">会议</button>
+      <button class="tab" type="button" data-view="notes">笔记</button>
+    </nav>
+    <div class="shell-right">
+      <p class="shell-date" id="shellDate" role="status"></p>
+      <button class="key key--quiet key--sm" id="resetDemo" type="button">重置演示数据</button>
+    </div>
+  </div>
+</header>
+
+<main id="panel" class="panel">
+
+  <!-- 工作台 -->
+  <section class="view" id="view-home" aria-labelledby="home-date">
+    <header class="day-head">
+      <div class="day-block">
+        <h1 class="day-date" id="home-date"><span class="num" id="dateText"></span><span class="day-week" id="weekText"></span></h1>
+        <p class="day-note" id="homeLine"></p>
+      </div>
+      <div class="day-actions">
+        <button class="key key--primary" type="button" id="homeAddFocus">记一条待办</button>
+        <button class="key key--quiet" type="button" data-goto="meetings">看今天的会</button>
+      </div>
+    </header>
+
+    <div class="home-grid">
+      <div class="home-main">
+        <section class="pane" aria-labelledby="tl-h">
+          <header class="pane-head">
+            <h2 class="pane-title" id="tl-h">今日日程</h2>
+            <p class="pane-sub" id="tlRange"></p>
+            <button class="link-btn" type="button" data-goto="meetings">全部会议</button>
+          </header>
+          <div class="ruler" id="timeline" aria-label="今日日程时间轴"></div>
+          <footer class="pane-foot" id="tlFoot"></footer>
+        </section>
+
+        <section class="pane" aria-labelledby="td-h">
+          <header class="pane-head">
+            <h2 class="pane-title" id="td-h">今日待办</h2>
+            <p class="pane-sub" id="tdSub"></p>
+            <button class="link-btn" type="button" data-goto="todos">全部待办</button>
+          </header>
+          <ul class="rows rows--home" id="homeTodos"></ul>
+          <div class="composer">
+            <label class="visually-hidden" for="homeAdd">新待办内容</label>
+            <input class="input composer-input" id="homeAdd" placeholder="加一条待办，回车保存" autocomplete="off">
+            <div class="composer-right">
+              <button class="chip-btn" type="button" id="homeDue" aria-haspopup="dialog" aria-expanded="false">
+                <svg class="icon" aria-hidden="true"><use href="#i-cal"></use></svg><span id="homeDueText">今天截止</span>
+              </button>
+              <button class="key key--sm key--primary" type="button" id="homeAddBtn">添加</button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <aside class="home-aside">
+        <section class="block" aria-labelledby="week-h">
+          <header class="block-head">
+            <h2 id="week-h">本周</h2>
+            <p class="block-sub" id="weekRange"></p>
+          </header>
+          <dl class="ledger" id="ledger"></dl>
+          <div class="meter" aria-hidden="true"><i id="ledgerMeter"></i></div>
+        </section>
+
+        <section class="block" aria-labelledby="rhythm-h">
+          <header class="block-head">
+            <h2 id="rhythm-h">这一周</h2>
+            <p class="block-sub">按天看安排</p>
+          </header>
+          <ul class="rhythm" id="rhythm"></ul>
+        </section>
+
+        <section class="block" aria-labelledby="notes-h">
+          <header class="block-head">
+            <h2 id="notes-h">最近笔记</h2>
+            <button class="link-btn" type="button" data-goto="notes">全部</button>
+          </header>
+          <ul class="mini" id="recentNotes"></ul>
+        </section>
+      </aside>
+    </div>
+  </section>
+
+  <!-- 待办 -->
+  <section class="view" id="view-todos" aria-labelledby="todos-h" hidden>
+    <div class="split">
+      <aside class="rail" aria-label="待办视图">
+        <h2 class="rail-label">视图</h2>
+        <nav class="rail-nav" id="todoViews" aria-label="智能视图"></nav>
+        <h2 class="rail-label rail-label--cats">分类</h2>
+        <nav class="rail-nav" id="todoCats" aria-label="分类筛选"></nav>
+        <button class="rail-add" type="button" id="newCat">新建分类</button>
+      </aside>
+
+      <div class="main">
+        <header class="phead">
+          <div>
+            <h1 class="phead-title" id="todos-h">全部待办</h1>
+            <p class="phead-sub" id="todosSub"></p>
+          </div>
+          <button class="key key--primary" type="button" id="newTodoBtn">新增</button>
+        </header>
+
+        <div class="stat-band" id="todoStats"></div>
+
+        <div class="toolbar">
+          <label class="field field--search">
+            <svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg>
+            <input type="search" id="todoSearch" placeholder="搜索标题或分类" autocomplete="off">
+            <span class="visually-hidden">搜索待办</span>
+          </label>
+          <label class="field field--select">
+            <span class="visually-hidden">排序</span>
+            <select id="todoSort">
+              <option value="smart">智能排序</option>
+              <option value="due">按截止日期</option>
+              <option value="priority">按优先级</option>
+              <option value="title">按标题</option>
+              <option value="created">按创建时间</option>
+            </select>
+            <svg class="icon icon--select" aria-hidden="true"><use href="#i-chev-right"></use></svg>
+          </label>
+        </div>
+
+        <ul class="rows rows--todo" id="todoList"></ul>
+        <div class="empty" id="todoEmpty" hidden>
+          <h2 class="empty-title">这里还没有待办</h2>
+          <p class="empty-line">写下第一件要推进的事，设个截止日期，它就会出现在工作台的今天里。</p>
+          <button class="key key--quiet" type="button" id="emptyNewTodo">新建第一条</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 会议 -->
+  <section class="view" id="view-meetings" aria-labelledby="m-h" hidden>
+    <div class="split split--meet">
+      <aside class="rail" aria-label="会议导航">
+        <nav class="rail-nav" id="meetNav" aria-label="快速导航"></nav>
+        <h2 class="rail-label rail-label--cats">本月会议</h2>
+        <ul class="mini" id="monthMeetings"></ul>
+      </aside>
+
+      <div class="main">
+        <header class="phead">
+          <div>
+            <h1 class="phead-title" id="m-h"></h1>
+            <p class="phead-sub" id="monthSub"></p>
+          </div>
+          <div class="phead-actions">
+            <button class="key key--icon" type="button" id="prevMonth" aria-label="上个月"><svg class="icon" aria-hidden="true"><use href="#i-chev-left"></use></svg></button>
+            <button class="key key--quiet key--sm" type="button" id="todayBtn">今天</button>
+            <button class="key key--icon" type="button" id="nextMonth" aria-label="下个月"><svg class="icon" aria-hidden="true"><use href="#i-chev-right"></use></svg></button>
+            <button class="key key--primary" type="button" id="newMeeting">新建会议</button>
+          </div>
+        </header>
+
+        <div class="cal-head" id="calHead" aria-hidden="true"></div>
+        <div class="cal" id="calendar" role="grid" aria-labelledby="m-h"></div>
+      </div>
+
+      <aside class="detail" id="dayDetail" aria-live="polite"></aside>
+    </div>
+  </section>
+
+  <!-- 笔记 -->
+  <section class="view" id="view-notes" aria-labelledby="notes-h" hidden>
+    <div class="split split--notes">
+      <aside class="rail rail--notes" aria-label="笔记列表">
+        <h1 class="visually-hidden" id="notes-h">笔记</h1>
+        <label class="field field--search">
+          <svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg>
+          <input type="search" id="noteSearch" placeholder="搜索标题或正文" autocomplete="off">
+          <span class="visually-hidden">搜索笔记</span>
+        </label>
+        <button class="key key--quiet key--block" type="button" id="newNote">
+          <svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>新建笔记
+        </button>
+        <ul class="note-list" id="noteList"></ul>
+      </aside>
+
+      <div class="editor" id="editorWrap">
+        <header class="editor-head">
+          <label class="visually-hidden" for="noteTitle">笔记标题</label>
+          <input class="title-input" id="noteTitle" placeholder="无标题笔记" autocomplete="off">
+          <button class="key key--icon" type="button" id="starNote" aria-label="收藏这条笔记" aria-pressed="false">
+            <svg class="icon" aria-hidden="true"><use href="#i-star"></use></svg>
+          </button>
+        </header>
+
+        <div class="meta-line">
+          <time id="noteTime"></time>
+          <span id="noteWords" class="num"></span>
+          <span id="saveState" role="status"></span>
+        </div>
+
+        <label class="tags-row">
+          <span class="tags-label">标签</span>
+          <input class="tags-input" id="noteTags" placeholder="标签，用逗号分隔，最多 8 个" autocomplete="off">
+        </label>
+
+        <div class="modes" role="tablist" aria-label="编辑模式">
+          <button class="mode is-on" type="button" role="tab" aria-selected="true" data-mode="live">即时</button>
+          <button class="mode" type="button" role="tab" aria-selected="false" data-mode="edit">编辑</button>
+          <button class="mode" type="button" role="tab" aria-selected="false" data-mode="split">分屏</button>
+          <button class="mode" type="button" role="tab" aria-selected="false" data-mode="preview">预览</button>
+        </div>
+
+        <div class="write" id="writeArea" data-mode="live">
+          <span class="visually-hidden" id="bodyLabel">笔记正文</span>
+          <textarea id="noteBody" aria-labelledby="bodyLabel" placeholder="在这里开始写。支持标题、列表和待办勾选，写完可以用下方按钮把勾选项转成待办。"></textarea>
+          <div class="preview" id="notePreview"></div>
+        </div>
+
+        <footer class="editor-foot">
+          <div class="foot-left">
+            <button class="text-btn is-danger" type="button" id="deleteNote">删除</button>
+            <button class="text-btn" type="button" id="todosFromNote">勾选项转待办</button>
+            <button class="text-btn" type="button" id="noteHistory">历史</button>
+          </div>
+          <p class="foot-status" id="footStatus" role="status"></p>
+          <button class="key key--primary" type="button" id="saveNote">保存</button>
+        </footer>
+      </div>
+
+      <div class="empty empty--notes" id="notesEmpty" hidden>
+        <h2 class="empty-title">还没有笔记</h2>
+        <p class="empty-line">新建一篇，边写边存。标题、标签和正文都会自动保存。</p>
+        <button class="key key--primary" type="button" id="emptyNewNote">新建一篇</button>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="demo-note">
+  <p>演示数据只保存在本机浏览器，重置后回到初始样本。四个面板的功能与插件现有能力对应，未接后端。</p>
+</footer>
+
+<div class="undo" id="undo" hidden>
+  <p id="undoText"></p>
+  <button class="text-btn" type="button" id="undoBtn">撤销</button>
+</div>
+
+<!-- 待办弹窗 -->
+<dialog class="modal" id="todoDialog" aria-labelledby="todoDialogTitle">
+  <form method="dialog" class="modal-form" id="todoForm" novalidate>
+    <header class="modal-head">
+      <h2 class="modal-title" id="todoDialogTitle">新建待办</h2>
+      <button class="key key--icon" type="submit" value="cancel" aria-label="关闭" formnovalidate>
+        <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>
+      </button>
+    </header>
+    <div class="field-stack">
+      <label class="field-label" for="tdTitle">待办内容</label>
+      <input class="input" id="tdTitle" name="title" required autocomplete="off" placeholder="例如：把运维流程补上数据脱敏一节">
+      <p class="field-help" id="tdTitleHelp" role="status"></p>
+    </div>
+    <div class="field-grid">
+      <div class="field-stack">
+        <label class="field-label" for="tdPriority">优先级</label>
+        <label class="field field--select">
+          <span class="visually-hidden">优先级</span>
+          <select id="tdPriority" name="priority">
+            <option value="high">高</option>
+            <option value="mid" selected>中</option>
+            <option value="low">低</option>
+          </select>
+          <svg class="icon icon--select" aria-hidden="true"><use href="#i-chev-right"></use></svg>
+        </label>
+      </div>
+      <div class="field-stack">
+        <label class="field-label" for="tdCategory">分类</label>
+        <label class="field field--select">
+          <span class="visually-hidden">分类</span>
+          <select id="tdCategory" name="category"></select>
+          <svg class="icon icon--select" aria-hidden="true"><use href="#i-chev-right"></use></svg>
+        </label>
+      </div>
+      <div class="field-stack">
+        <span class="field-label" id="tdDueLabel">截止</span>
+        <span class="field field--button" id="dialogDueHost" aria-labelledby="tdDueLabel"></span>
+      </div>
+    </div>
+    <footer class="modal-foot">
+      <button class="key key--quiet" type="submit" value="cancel" formnovalidate>取消</button>
+      <button class="key key--primary" type="submit" value="save">保存</button>
+    </footer>
+  </form>
+</dialog>
+
+<!-- 会议弹窗 -->
+<dialog class="modal" id="meetingDialog" aria-labelledby="meetingTitle">
+  <form method="dialog" class="modal-form" id="meetingForm" novalidate>
+    <header class="modal-head">
+      <h2 class="modal-title" id="meetingTitle">排一场会议</h2>
+      <button class="key key--icon" type="submit" value="cancel" aria-label="关闭" formnovalidate>
+        <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>
+      </button>
+    </header>
+    <div class="field-stack">
+      <label class="field-label" for="mtTitle">会议主题</label>
+      <input class="input" id="mtTitle" name="title" required autocomplete="off" placeholder="例如：项目沟通会">
+      <p class="field-help" id="mtTitleHelp" role="status"></p>
+    </div>
+    <div class="field-grid">
+      <div class="field-stack">
+        <label class="field-label" for="mtDate">日期</label>
+        <input class="input" type="date" id="mtDate" name="date" required>
+      </div>
+      <div class="field-stack">
+        <label class="field-label" for="mtStart">开始</label>
+        <input class="input" type="time" id="mtStart" name="start" required value="10:00">
+      </div>
+      <div class="field-stack">
+        <label class="field-label" for="mtMinutes">时长</label>
+        <label class="field field--select">
+          <span class="visually-hidden">时长</span>
+          <select id="mtMinutes" name="minutes">
+            <option value="30">30 分钟</option>
+            <option value="45">45 分钟</option>
+            <option value="60" selected>1 小时</option>
+            <option value="90">1.5 小时</option>
+            <option value="120">2 小时</option>
+          </select>
+          <svg class="icon icon--select" aria-hidden="true"><use href="#i-chev-right"></use></svg>
+        </label>
+      </div>
+    </div>
+    <div class="field-stack">
+      <label class="field-label" for="mtPlace">地点或链接</label>
+      <input class="input" id="mtPlace" name="place" autocomplete="off" placeholder="会议室，或留空">
+    </div>
+    <p class="field-help" id="mtConflict" role="status"></p>
+    <footer class="modal-foot">
+      <button class="key key--quiet" type="submit" value="cancel" formnovalidate>取消</button>
+      <button class="key key--primary" type="submit" value="save">排进日历</button>
+    </footer>
+  </form>
+</dialog>
+
+<!-- 历史弹窗 -->
+<dialog class="modal" id="historyDialog" aria-labelledby="historyTitle">
+  <div class="modal-form">
+    <header class="modal-head">
+      <h2 class="modal-title" id="historyTitle">这条笔记的历史</h2>
+      <button class="key key--icon" type="button" id="closeHistory" aria-label="关闭">
+        <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>
+      </button>
+    </header>
+    <ul class="history-list" id="historyList"></ul>
+    <footer class="modal-foot">
+      <button class="key key--quiet" type="button" id="closeHistory2">关闭</button>
+    </footer>
+  </div>
+</dialog>
+
+<!-- 截止日期选择 -->
+<div class="due-pop" id="duePop" role="dialog" aria-label="选择截止日期" hidden>
+  <header class="due-head">
+    <h3 class="due-title" id="dueTitle">截止日期</h3>
+    <button class="key key--icon key--sm" type="button" id="dueClose" aria-label="关闭">
+      <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>
+    </button>
+  </header>
+  <p class="due-value" id="dueValue"></p>
+  <div class="due-quick" id="dueQuick"></div>
+  <div class="due-cal">
+    <header class="due-cal-head">
+      <button class="key key--icon key--xs" type="button" id="duePrev" aria-label="上个月">
+        <svg class="icon" aria-hidden="true"><use href="#i-chev-left"></use></svg>
+      </button>
+      <p class="due-month" id="dueMonth"></p>
+      <button class="key key--icon key--xs" type="button" id="dueNext" aria-label="下个月">
+        <svg class="icon" aria-hidden="true"><use href="#i-chev-right"></use></svg>
+      </button>
+    </header>
+    <div class="due-week" aria-hidden="true"></div>
+    <div class="due-grid" id="dueGrid"></div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

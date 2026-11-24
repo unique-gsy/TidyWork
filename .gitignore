@@ -1,0 +1,12 @@
+# 密钥与本地数据不入库
+.env
+data/
+*.log
+.DS_Store
+__pycache__/
+*.pyc
+
+# 构建产物与历史备份不入库
+dist/
+backups/
+node_modules/
