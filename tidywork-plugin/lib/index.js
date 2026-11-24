@@ -144,6 +144,9 @@ fi
 /** 已发布过的地址（避免每个请求都重写文件）。 */
 let publishedOrigin = "";
 
+/** 邮箱模块实例：apply() 里注入，供 HTTP 路由（/tidywork-api/mail/*）使用。 */
+let mailModule = null;
+
 /** 读取本实例 webServer 的原始地址；端口尚未绑定 / 无 URL 形式时返回空串。 */
 function readOrigin(server) {
   try {
@@ -791,6 +794,75 @@ async function routeCore(req, res, url) {
     } catch (error) {
       serverError(res, error);
     }
+    return;
+  }
+
+  // ---- 邮箱模块 /tidywork-api/mail/{status,scan,rsvp} ----
+  // 扫描走的是 Python 引擎（IMAP + CalDAV），可能跑几十秒，前端要放宽超时；
+  // 所有写操作仍然经过 guardRequest 的来源校验，参数一律白名单，不接受任意路径。
+  if (segs[0] === "tidywork-api" && segs[1] === "mail") {
+    if (!mailModule) {
+      sendJson(res, 503, { ok: false, error: "邮箱模块尚未就绪" });
+      return;
+    }
+    const action = segs[2] || "";
+    if (segs.length === 3 && action === "status") {
+      if (req.method !== "GET") {
+        sendJson(res, 405, { ok: false, error: "method not allowed" });
+        return;
+      }
+      try {
+        sendJson(res, 200, { ok: true, data: await mailModule.status() });
+      } catch (error) {
+        serverError(res, error);
+      }
+      return;
+    }
+    if (segs.length === 3 && action === "scan") {
+      if (req.method !== "POST") {
+        sendJson(res, 405, { ok: false, error: "method not allowed" });
+        return;
+      }
+      try {
+        const body = await readJson(req).catch(() => ({}));
+        logInfo("邮箱扫描开始：" + JSON.stringify({ days: body && body.days, folder: body && body.folder }));
+        const result = await mailModule.scan(body || {});
+        if (!result.ok) {
+          sendJson(res, 400, { ok: false, error: result.text });
+          return;
+        }
+        logInfo("邮箱扫描完成：待办 +" + ((result.sync && result.sync.todos) || 0) + "，会议 +" + ((result.sync && result.sync.meetings) || 0));
+        sendJson(res, 200, { ok: true, data: { text: result.text, sync: result.sync || null } });
+      } catch (error) {
+        serverError(res, error);
+      }
+      return;
+    }
+    if (segs.length === 3 && action === "rsvp") {
+      if (req.method !== "POST") {
+        sendJson(res, 405, { ok: false, error: "method not allowed" });
+        return;
+      }
+      try {
+        const body = await readJson(req);
+        const id = textField(body.id, 64, "会议编号");
+        if (!id) throw new HttpError(400, "缺少会议编号");
+        const result = await mailModule.rsvp({ id: id, action: body.action });
+        if (result.notFound) {
+          sendJson(res, 404, { ok: false, error: result.text });
+          return;
+        }
+        if (!result.ok) {
+          sendJson(res, 400, { ok: false, error: result.text });
+          return;
+        }
+        sendJson(res, 200, { ok: true, data: { text: result.text } });
+      } catch (error) {
+        serverError(res, error);
+      }
+      return;
+    }
+    sendJson(res, 404, { ok: false, error: "未知的邮箱接口" });
     return;
   }
 
@@ -1540,6 +1612,7 @@ async function apply(ctx) {
       rid,
       localStamp
     });
+    mailModule = mail;
 
     // Agent 工具：会话中通过自然语言新增待办/会议/笔记，以及邮箱扫描/回复邀请。
     if (services.tools) {

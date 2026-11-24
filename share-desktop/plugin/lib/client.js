@@ -376,13 +376,16 @@ window.__ModuleLoader__.load({
 		 *  v3.30：加 15s 超时；非 JSON 响应（登录过期回来的 HTML、网关错误页）转成人话，
 		 *  不再把 "Unexpected token '<'" 直接甩到 toast 上。 */
 		const API_TIMEOUT = 15000;
+		/** opts.timeoutMs 可为长任务（邮箱扫描）放宽超时，其余请求仍按 15 秒。 */
 		function api(path, opts) {
 			const init = Object.assign({ headers: { "Content-Type": "application/json" } }, opts || {});
+			const timeoutMs = Number(init.timeoutMs) > 0 ? Number(init.timeoutMs) : API_TIMEOUT;
+			delete init.timeoutMs;
 			const ctrl = typeof AbortController === "function" ? new AbortController() : null;
 			let timer = null;
 			if (ctrl) {
 				init.signal = ctrl.signal;
-				timer = setTimeout(() => ctrl.abort(), API_TIMEOUT);
+				timer = setTimeout(() => ctrl.abort(), timeoutMs);
 			}
 			const settle = () => { if (timer) clearTimeout(timer); };
 			return fetch(path, init).then(
@@ -392,7 +395,7 @@ window.__ModuleLoader__.load({
 		}
 		function friendlyNetError(e) {
 			if (e && (e.name === "AbortError" || e.code === 20)) {
-				const err = new Error("请求超时（15 秒未响应），请稍后重试");
+				const err = new Error("请求超时（服务端未响应），请稍后重试");
 				err.status = 0;
 				return err;
 			}
@@ -650,6 +653,54 @@ window.__ModuleLoader__.load({
 					// 是否真的落盘由保存对话框自己反馈，这里只在请求失败时提示。
 				})
 				.catch((e) => toast("导出失败：" + e.message));
+		}
+
+		/** 「来自邮箱」小标：只对 source.type === "mail" 的条目出现，hover 显示邮件主题与发件人。 */
+		function MailTag(props) {
+			const src = props && props.source;
+			if (!src || src.type !== "mail") return null;
+			const tip = "来自邮箱" + (src.subject ? "：" + src.subject : "") + (src.from ? "（" + src.from + "）" : "");
+			return h(
+				"span",
+				{
+					title: tip,
+					"aria-label": tip,
+					style: { padding: "1px 6px", background: tint(C.accent, 10), color: C.accent, borderRadius: 4, fontSize: 11, whiteSpace: "nowrap" }
+				},
+				"✉ 邮箱"
+			);
+		}
+
+		/**
+		 * 「扫描邮箱」按钮：调 /tidywork-api/mail/scan（服务端跑 Python 引擎，可能几十秒）。
+		 * 结果只回一句摘要，具体条目由各面板重新拉取数据展示。
+		 */
+		function MailScanButton(props) {
+			const [busy, setBusy] = useState(false);
+			const run = () => {
+				if (busy) return;
+				setBusy(true);
+				toast("正在扫描邮箱（邮件 + 日历），通常需要 10–60 秒…");
+				api("/tidywork-api/mail/scan", { method: "POST", body: JSON.stringify({ days: 7 }), timeoutMs: 180000 })
+					.then((d) => {
+						const s = (d && d.sync) || {};
+						toast("已扫描：待办 +" + (s.todos || 0) + " · 会议 +" + (s.meetings || 0));
+						if (props && props.onDone) props.onDone();
+					})
+					.catch((e) => toast(e.message))
+					.then(() => setBusy(false));
+			};
+			return h(
+				"button",
+				{
+					type: "button",
+					onClick: run,
+					disabled: busy,
+					title: "从邮箱抓取待办与会议；首次使用需在数据目录的 mail/config.ini 填邮箱账号",
+					style: Object.assign({}, S.btnGhost, { opacity: busy ? 0.6 : 1, cursor: busy ? "default" : "pointer" })
+				},
+				busy ? "扫描中…" : "扫描邮箱"
+			);
 		}
 
 		function DuePicker(props) {
@@ -1184,6 +1235,7 @@ window.__ModuleLoader__.load({
 												"div",
 												{ style: { fontSize: 12, color: C.text2, marginTop: 4, display: "flex", gap: 8, alignItems: "center" } },
 												h("span", { style: { padding: "1px 6px", background: tint(C.danger, 12), color: (PRIORITY[it.priority] || PRIORITY.mid).color, borderRadius: 4, fontSize: 11 } }, (PRIORITY[it.priority] || PRIORITY.mid).label),
+												h(MailTag, { source: it.source }),
 												h("span", { style: { padding: "1px 6px", background: C.accentSoft, color: C.accent, borderRadius: 4, fontSize: 11 } }, esc(it.category || "")),
 												h("span", null, esc(DUE_LABEL[it.due] || it.due || "")),
 												h("button", { type: "button", style: S.linkBtn, onClick: () => openEdit(it) }, "编辑"),
@@ -1391,8 +1443,16 @@ window.__ModuleLoader__.load({
 					})
 					.catch((e) => toast(e.message));
 			};
-			const remove = (m) => {
-				// 不用 confirm()：删完用 toast 撤销
+			// 邮箱邀请：同意 / 拒绝（服务端交给引擎回执，再同步一次看板；拒绝的会从看板移出）
+			const sendRsvp = (m, action) => {
+				api("/tidywork-api/mail/rsvp", { method: "POST", body: JSON.stringify({ id: m.id, action: action }) })
+					.then(() => {
+						toast(action === "accept" ? "已确认参加：" + m.title : "已拒绝并移出：" + m.title);
+						load();
+					})
+					.catch((e) => toast(e.message));
+			};
+			const remove = (m) => {				// 不用 confirm()：删完用 toast 撤销
 				api("/tidywork-api/meetings/" + m.id, { method: "DELETE" })
 					.then((removed) => {
 						const src = removed && removed.title ? removed : m;
@@ -1637,11 +1697,14 @@ window.__ModuleLoader__.load({
 															h(
 																"div",
 																{ style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 } },
-																h("div", { style: { fontSize: 14, fontWeight: 600 } }, m.title),
+																h("div", { style: { fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", gap: 8, minWidth: 0 } }, m.title, h(MailTag, { source: m.source })),
 																h(
 																	"span",
 																	{ style: { display: "flex", gap: 8, alignItems: "center" } },
 																	h("span", { style: { fontSize: 11, padding: "2px 8px", background: badgeBg, color: badgeColor, borderRadius: 10 } }, m.statusText),
+																	m.rsvp === "confirmed" ? h("span", { title: "已在邮件里确认参加", style: { fontSize: 11, padding: "2px 8px", background: tint(C.success, 12), color: C.success, borderRadius: 10 } }, "已确认参加") : null,
+																	m.rsvp === "pending" ? h("button", { type: "button", title: "确认参加这场会议（更新看板状态，不发邮件）", style: Object.assign({}, S.linkBtn, { color: C.success, fontWeight: 600 }), onClick: () => sendRsvp(m, "accept") }, "接受") : null,
+																	m.rsvp === "pending" ? h("button", { type: "button", title: "拒绝这场会议并从看板移出", style: Object.assign({}, S.linkBtn, { color: C.danger }), onClick: () => sendRsvp(m, "decline") }, "拒绝") : null,
 																	h("button", { type: "button", style: Object.assign({}, S.linkBtn, { color: C.accent }), onClick: () => openEdit(m) }, "编辑"),
 																	h("button", { type: "button", style: Object.assign({}, S.linkBtn, { color: C.danger }), onClick: () => todoFromMeeting(m) }, "转待办"),
 																	h("button", { type: "button", style: Object.assign({}, S.linkBtn, { color: C.text2 }), onClick: () => remove(m) }, "删除")
@@ -3447,6 +3510,7 @@ window.__ModuleLoader__.load({
 							},
 							"＋ 新建工作项"
 						),
+						h(MailScanButton, { onDone: reload }),
 						h("button", { type: "button", onClick: exportAll, title: "导出全部数据为 JSON 备份", style: S.btnGhost }, "导出")
 					)
 				),

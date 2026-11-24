@@ -8,6 +8,7 @@
 - **工作区数据**：插件服务端半注册 `/tidywork-api` 路由（DSH webServer），数据以 JSON 落盘 DSH profile 数据目录，跨容器/会话存活
 - **部署**：单容器（Docker / OrbStack），`docker-compose.yml` 一个文件分享给任何人
 
+> v3.32.0 变更（邮箱进界面）：工作台顶栏加「扫描邮箱」按钮（`POST /tidywork-api/mail/scan`，前端超时放宽到 180s，服务端扫描串行化）；待办与会议卡片显示「✉ 邮箱」来源标（hover 出邮件主题与发件人）；待确认的邮件邀请会议卡片上直接「接受 / 拒绝」（`POST /tidywork-api/mail/rsvp`，按看板 id 反查 mailKey）。旧版数据（`mail_key` / `urgent|normal` / 中文 rsvp 标签）在首次同步时自动归一，不产生重复条目。界面三处之外未动其他布局。
 > v3.31.0 变更（邮箱模块并入，界面未动）：把 QQ 邮箱引擎接进主插件——`tidywork-plugin/engine/` 放引擎源码（标准库即可跑通扫描，CalDAV 才需要第三方库），配置与清单状态改落数据目录 `<dataRoot>/mail/`，交付包只带 `config.example.ini` 模板；新增 5 个 Agent 工具 `tidywork_mail_scan / list / rsvp / done / add`，邮件与日历抽出的待办、会议直接投影进现有 `todos.json` / `meetings.json`（按 `mailKey` upsert，引擎侧消失即从看板清理）。口径统一：待办优先级三档 `high/mid/low`（引擎的 urgent→high、normal→mid），会议新增独立 `rsvp`（`pending/confirmed/declined`）和 `source.type = "mail"`，不与按起止时间算出的 未开始/进行中/已结束 混用。界面（来源标、扫描按钮、RSVP）留到下一版。
 > v3.30.2 变更：修掉 3.30.1 里「新建工作项」改名不生效的两处硬伤——① 客户端插件没声明 `sessions` 注入，`ctx.sessions` 取不到（改名直接抛 `cannot get property "sessions" without inject`），已补 `inject`；② 会话刚建出来时还没进客户端目录，`sessions.using()` 拿不到 binding，已改为「先等它出现在会话列表，再改名，最多重试 6 次」，并且复用当天记录时也会补改名。实测：点「＋ 新建工作项」窗口标题变成 `2026-11-24`、会话落在 TidyWork 工作区，同一天再点复用同一个不新建；点「新会话」进的是「未分组」普通会话、顶部显示「选择工作区」。
 > v3.30.1 变更：把「新会话」和「＋ 新建工作项」彻底分开——「新会话」接管宿主 `ctx.uiWorkspace.startSession()`（仅限没指定工作区、没预填草稿的调用），改为开一个不属于任何工作区的普通 DSH 会话，不再落进 TidyWork；「＋ 新建工作项」走 `connectWorkspace` 在 TidyWork 工作区里建当天会话并把标题改成 `yyyy-mm-dd`，当天已存在（按标题判定）就复用同一个。

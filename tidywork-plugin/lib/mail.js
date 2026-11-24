@@ -29,6 +29,9 @@ const TAG_TODO = "一般待办";
 const TAG_FEEDBACK = "待反馈";
 const TAG_MEETING = "会议";
 
+/** 扫描串行队列：一次只跑一个扫描，避免并发写坏清单文件。 */
+let scanChain = Promise.resolve();
+
 /** 邮箱引擎子命令白名单：只放行待办清单相关的确定性命令。 */
 const ALLOWED_COMMANDS = new Set([
   "todo-scan",
@@ -113,7 +116,7 @@ function pythonCandidates() {
  * 跑一次邮箱引擎子命令。参数以数组传入，不经过 shell。
  * @returns {Promise<{ok:boolean, text:string, data:any}>}
  */
-async function runEngine(args) {
+async function runEngine(args, dataRootArg) {
   const cmd = String(args[0] || "");
   if (!ALLOWED_COMMANDS.has(cmd)) {
     return { ok: false, text: "不支持的邮箱操作：" + cmd, data: null };
@@ -121,7 +124,7 @@ async function runEngine(args) {
   if (!existsSync(join(ENGINE_DIR, "run.py"))) {
     return { ok: false, text: "邮箱引擎缺失：插件目录下没有 engine/run.py", data: null };
   }
-  const config = await ensureConfig();
+  const config = await ensureConfig(dataRootArg);
   const env = Object.assign({}, process.env, {
     QQMAIL_CONFIG: config.path,
     PYTHONIOENCODING: "utf-8"
@@ -273,6 +276,30 @@ function mapMeeting(item) {
 // 投影：engine/todo.json → todos.json / meetings.json
 // ---------------------------------------------------------------------------
 
+/** 旧版（v3.2x 交付包）留下的字段名归一：mail_key → mailKey，urgent/normal → high/mid。 */
+function legacyTodo(it) {
+  if (!it || typeof it !== "object") return it;
+  if (!it.mailKey && it.mail_key) it.mailKey = String(it.mail_key);
+  if (it.priority === "urgent") it.priority = "high";
+  else if (it.priority === "normal") it.priority = "mid";
+  if (!it.source && it.origin === "mail") it.source = { type: "mail" };
+  return it;
+}
+
+/** 旧版会议：rsvp_status 的中文标签归一成 pending/confirmed/declined，并补齐 mailKey。 */
+function legacyMeeting(it) {
+  if (!it || typeof it !== "object") return it;
+  if (!it.mailKey && it.mail_key) it.mailKey = String(it.mail_key);
+  if (!it.rsvp) {
+    const raw = String(it.rsvp_status || "");
+    if (raw.indexOf("待确认") >= 0) it.rsvp = "pending";
+    else if (raw.indexOf("确认参加") >= 0) it.rsvp = "confirmed";
+    else if (raw.indexOf("拒绝") >= 0) it.rsvp = "declined";
+  }
+  if (!it.source && it.origin === "mail") it.source = { type: "mail" };
+  return it;
+}
+
 /**
  * 把引擎清单投影到看板。以 mailKey 做 upsert，引擎侧已不存在的条目从看板移除。
  * @param deps - 主插件注入的存储能力 { dataRoot, withQueue, readStore, saveStore, rid, localStamp }
@@ -304,6 +331,7 @@ async function syncMailToBoard(deps) {
   await withQueue("todos", async () => {
     const file = join(dataRoot, "todos.json");
     const store = await readStore(file, "todos");
+    store.items = (store.items || []).map(legacyTodo);
     const before = (store.items || []).length;
     store.items = (store.items || []).filter((it) => !it.mailKey || todoKeys.has(it.mailKey));
     todoRemoved = before - store.items.length;
@@ -325,6 +353,7 @@ async function syncMailToBoard(deps) {
   await withQueue("meetings", async () => {
     const file = join(dataRoot, "meetings.json");
     const store = await readStore(file, "meetings");
+    store.items = (store.items || []).map(legacyMeeting);
     const before = (store.items || []).length;
     store.items = (store.items || []).filter((it) => !it.mailKey || meetingKeys.has(it.mailKey));
     meetingRemoved = before - store.items.length;
@@ -351,6 +380,104 @@ async function syncMailToBoard(deps) {
     removedTodos: todoRemoved,
     removedMeetings: meetingRemoved,
     total: items.length
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 对外动作：扫描 / 回复邀请 / 状态（Agent 工具与 HTTP 路由共用）
+// ---------------------------------------------------------------------------
+
+/**
+ * 扫描邮箱并投影进看板。界面按钮与 tidywork_mail_scan 工具走同一段逻辑。
+ * @returns {Promise<{ok:boolean, text:string, sync?:object, error?:string}>}
+ */
+async function scanMail(deps, opts) {
+  // 串行化：引擎会写同一个清单文件，两个扫描并行会互相覆盖
+  const run = () => scanOnce(deps, opts);
+  scanChain = scanChain.then(run, run);
+  return scanChain;
+}
+
+/** 扫描主体（已被 scanChain 串行化）。 */
+async function scanOnce(deps, opts) {
+  if (!(await configFilled(deps.dataRoot))) {
+    const path = join(mailDir(deps.dataRoot), "config.ini");
+    return {
+      ok: false,
+      text: "尚未配置邮箱：请把 " + path + " 里的 email 与 auth_code 填好（QQ 邮箱 → 设置 → 账号 → 开启 IMAP 后获取授权码），再重试。"
+    };
+  }
+  const days = safeInt(opts && opts.days, 1, 90, 7);
+  const folder = safeFolder(opts && opts.folder) || "inbox";
+  const maxMails = safeInt(opts && opts.maxMails, 1, 200, 40);
+  const withCalendar = !(opts && opts.withCalendar === false);
+  const argv = [
+    "todo-scan",
+    "--days", String(days),
+    "--folder", folder,
+    "--max-mails", String(maxMails),
+    "--state", statePath(deps.dataRoot),
+    "--format", "markdown"
+  ];
+  if (!withCalendar) argv.push("--no-calendar");
+  const engine = await runEngine(argv, deps.dataRoot);
+  if (!engine.ok) return { ok: false, text: engine.text };
+  const synced = await syncMailToBoard(deps);
+  const summary =
+    "已同步进工作区：新增待办 " + synced.todos + " 条、会议 " + synced.meetings + " 场" +
+    (synced.removedTodos || synced.removedMeetings
+      ? "；清理已失效条目 待办 " + synced.removedTodos + " 条、会议 " + synced.removedMeetings + " 场"
+      : "");
+  return { ok: true, text: engine.text + "\n\n" + summary, sync: synced };
+}
+
+/**
+ * 回复邀请：accept 确认参加 / decline 拒绝并移出看板。
+ * 界面传的是看板里的会议 id，这里反查 mailKey 再交给引擎。
+ */
+async function rsvpMail(deps, args) {
+  const action = String((args && args.action) || "");
+  if (action !== "accept" && action !== "decline") return { ok: false, text: "action 只能取 accept 或 decline" };
+  let id = String((args && args.mailKey) || "").trim();
+  if (!id && args && args.id) {
+    // 看板 id → mailKey
+    const store = await deps.readStore(join(deps.dataRoot, "meetings.json"), "meetings");
+    const meet = (store.items || []).find((x) => x.id === args.id);
+    if (!meet) return { ok: false, text: "会议不存在或已被清理", notFound: true };
+    id = String(meet.mailKey || "");
+    if (!id) return { ok: false, text: "这场会议不是从邮箱同步来的，无法在这里回复邀请", notFound: true };
+  }
+  if (!id) return { ok: false, text: "缺少清单编号" };
+  let safe;
+  try {
+    safe = safeId(id);
+  } catch (error) {
+    return { ok: false, text: "清单编号格式不正确" };
+  }
+  const engine = await runEngine([
+    action === "accept" ? "todo-accept" : "todo-decline",
+    "--id", safe,
+    "--state", statePath(deps.dataRoot),
+    "--format", "markdown"
+  ], deps.dataRoot);
+  if (!engine.ok) return { ok: false, text: engine.text };
+  await syncMailToBoard(deps);
+  return { ok: true, text: engine.text };
+}
+
+/** 邮箱模块的状态：有没有配好账号、上次扫描时间、清单条数。 */
+async function mailStatus(deps) {
+  let state = null;
+  try {
+    state = JSON.parse(await readFile(statePath(deps.dataRoot), "utf8"));
+  } catch (error) {
+    state = null;
+  }
+  return {
+    configured: await configFilled(deps.dataRoot),
+    lastScan: state && state.updated_at ? state.updated_at : "",
+    items: state && Array.isArray(state.items) ? state.items.length : 0,
+    configPath: join(mailDir(deps.dataRoot), "config.ini")
   };
 }
 
@@ -390,32 +517,8 @@ function buildTools(deps) {
     },
     async execute(args) {
       try {
-        if (!(await configFilled(deps.dataRoot))) {
-          const path = join(mailDir(deps.dataRoot), "config.ini");
-          return toolResult(false, "尚未配置邮箱：请把 " + path + " 里的 email 与 auth_code 填好（QQ 邮箱 → 设置 → 账号 → 开启 IMAP 后获取授权码），再重试。");
-        }
-        const days = safeInt(args && args.days, 1, 90, 7);
-        const folder = safeFolder(args && args.folder) || "inbox";
-        const maxMails = safeInt(args && args.maxMails, 1, 200, 40);
-        const withCalendar = !(args && args.withCalendar === false);
-        const argv = [
-          "todo-scan",
-          "--days", String(days),
-          "--folder", folder,
-          "--max-mails", String(maxMails),
-          "--state", statePath(deps.dataRoot),
-          "--format", "markdown"
-        ];
-        if (!withCalendar) argv.push("--no-calendar");
-        const engine = await runEngine(argv);
-        if (!engine.ok) return toolResult(false, engine.text);
-        const synced = await syncMailToBoard(deps);
-        const summary =
-          "已同步进工作区：新增待办 " + synced.todos + " 条、会议 " + synced.meetings + " 场" +
-          (synced.removedTodos || synced.removedMeetings
-            ? "；清理已失效条目 待办 " + synced.removedTodos + " 条、会议 " + synced.removedMeetings + " 场"
-            : "");
-        return toolResult(true, engine.text + "\n\n" + summary, { sync: synced });
+        const result = await scanMail(deps, args || {});
+        return toolResult(result.ok, result.text, result.sync ? { sync: result.sync } : null);
       } catch (error) {
         return toolResult(false, "扫描邮箱失败：" + (error && error.message ? error.message : String(error)));
       }
@@ -445,7 +548,7 @@ function buildTools(deps) {
         if (["active", "pending", "accepted", "done", "all"].includes(status)) argv.splice(1, 0, "--status", status);
         const tag = String((args && args.tag) || "");
         if ([TAG_TODO, TAG_FEEDBACK, TAG_MEETING].includes(tag)) argv.splice(1, 0, "--tag", tag);
-        const engine = await runEngine(argv);
+        const engine = await runEngine(argv, deps.dataRoot);
         return toolResult(engine.ok, engine.text);
       } catch (error) {
         return toolResult(false, "读取清单失败：" + (error && error.message ? error.message : String(error)));
@@ -471,18 +574,8 @@ function buildTools(deps) {
     },
     async execute(args) {
       try {
-        const id = safeId(args && args.id);
-        const action = String((args && args.action) || "");
-        if (action !== "accept" && action !== "decline") return toolResult(false, "action 只能取 accept 或 decline");
-        const engine = await runEngine([
-          action === "accept" ? "todo-accept" : "todo-decline",
-          "--id", id,
-          "--state", statePath(deps.dataRoot),
-          "--format", "markdown"
-        ]);
-        if (!engine.ok) return toolResult(false, engine.text);
-        await syncMailToBoard(deps);
-        return toolResult(true, engine.text);
+        const result = await rsvpMail(deps, args || {});
+        return toolResult(result.ok, result.text);
       } catch (error) {
         return toolResult(false, "更新参加状态失败：" + (error && error.message ? error.message : String(error)));
       }
@@ -504,7 +597,7 @@ function buildTools(deps) {
     async execute(args) {
       try {
         const id = safeId(args && args.id);
-        const engine = await runEngine(["todo-done", "--id", id, "--state", statePath(deps.dataRoot), "--format", "markdown"]);
+        const engine = await runEngine(["todo-done", "--id", id, "--state", statePath(deps.dataRoot), "--format", "markdown"], deps.dataRoot);
         if (!engine.ok) return toolResult(false, engine.text);
         await syncMailToBoard(deps);
         return toolResult(true, engine.text);
@@ -560,7 +653,7 @@ function buildTools(deps) {
         if (feedbackTo) argv.push("--feedback-to", feedbackTo);
         const note = safeValue(args && args.note, 300, "备注");
         if (note) argv.push("--note", note);
-        const engine = await runEngine(argv);
+        const engine = await runEngine(argv, deps.dataRoot);
         if (!engine.ok) return toolResult(false, engine.text);
         await syncMailToBoard(deps);
         return toolResult(true, engine.text);
@@ -578,12 +671,18 @@ function buildTools(deps) {
  * @param deps - { dataRoot, withQueue, readStore, saveStore, rid, localStamp }
  */
 export function createMailModule(deps) {
+  // 主插件传进来的是 dataRoot() 函数（数据目录可能随 env 变化），测试里传的是字符串；这里统一成字符串。
+  const root = typeof deps.dataRoot === "function" ? deps.dataRoot() : deps.dataRoot;
+  const d = Object.assign({}, deps, { dataRoot: root });
   return {
-    tools: buildTools(deps),
-    runEngine: (args) => runEngine(args),
-    sync: () => syncMailToBoard(deps),
-    configPath: () => join(mailDir(deps.dataRoot), "config.ini"),
-    statePath: () => statePath(deps.dataRoot)
+    tools: buildTools(d),
+    runEngine: (args) => runEngine(args, root),
+    sync: () => syncMailToBoard(d),
+    scan: (opts) => scanMail(d, opts || {}),
+    rsvp: (args) => rsvpMail(d, args || {}),
+    status: () => mailStatus(d),
+    configPath: () => join(mailDir(root), "config.ini"),
+    statePath: () => statePath(root)
   };
 }
 

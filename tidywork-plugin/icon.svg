@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none">
-  <rect width="32" height="32" rx="7" fill="#4d6bfe"/>
-  <rect x="7" y="7" width="7.5" height="7.5" rx="1.5" fill="#ffffff"/>
-  <rect x="17.5" y="7" width="7.5" height="7.5" rx="1.5" fill="#ffffff" fill-opacity="0.65"/>
-  <rect x="7" y="17.5" width="7.5" height="7.5" rx="1.5" fill="#ffffff" fill-opacity="0.65"/>
-  <rect x="17.5" y="17.5" width="7.5" height="7.5" rx="1.5" fill="#ffffff"/>
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- TidyWork 独立图标标 · 圆角蓝底 + 白色连写 TW（窄栏 / favicon / 安装包用） -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="TidyWork">
+  <rect width="64" height="64" rx="14" fill="#3370ff"/>
+  <path d="M20 22 h24 M32 22 v20" stroke="#ffffff" stroke-width="5" stroke-linecap="round" fill="none"/>
+  <path d="M26 42 l6 -12 6 12" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
 </svg>

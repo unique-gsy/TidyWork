@@ -190,3 +190,46 @@ test("参数校验：选项注入、编号格式、数字边界都被挡住", ()
   assert.equal(safeInt(999, 1, 90, 7), 90);
   assert.equal(safeInt("abc", 1, 90, 7), 7);
 });
+
+test("兼容旧版数据：mail_key/urgent/normal/中文 rsvp 会被归一，不产生重复条目", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tw-mail-"));
+  try {
+    await mkdir(join(root, "mail"), { recursive: true });
+    await writeFile(join(root, "mail", "todo.json"), JSON.stringify(STATE), "utf8");
+    // 旧版交付包写出来的看板数据
+    await writeFile(
+      join(root, "todos.json"),
+      JSON.stringify({
+        version: 1,
+        items: [{ id: "t_old", title: "填报销单", priority: "urgent", category: "工作", due: "none", done: false, mail_key: "mail:todo:bbb", origin: "mail" }]
+      }),
+      "utf8"
+    );
+    await writeFile(
+      join(root, "meetings.json"),
+      JSON.stringify({
+        version: 1,
+        items: [{ id: "m_old", title: "产品评审", date: "2026-11-25", time: "15:00", duration: "15:00 - 15:30", rsvp_status: "待确认", mail_key: "mail:meeting:ccc", origin: "mail" }]
+      }),
+      "utf8"
+    );
+    const mail = createMailModule(fakeDeps(root));
+    await mail.sync();
+
+    const todos = JSON.parse(await readFile(join(root, "todos.json"), "utf8"));
+    assert.equal(todos.items.length, 2, "旧条目被复用，不应再新增一条");
+    const migrated = todos.items.find((x) => x.id === "t_old");
+    assert.equal(migrated.mailKey, "mail:todo:bbb");
+    assert.equal(migrated.priority, "mid");
+    assert.equal(migrated.source.type, "mail");
+
+    const meetings = JSON.parse(await readFile(join(root, "meetings.json"), "utf8"));
+    assert.equal(meetings.items.length, 2);
+    const migratedMeet = meetings.items.find((x) => x.id === "m_old");
+    assert.equal(migratedMeet.mailKey, "mail:meeting:ccc");
+    assert.equal(migratedMeet.rsvp, "pending");
+    assert.equal(migratedMeet.startTime, "15:00");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -230,3 +230,33 @@ test("导出接口一次给出全部数据", async () => {
   assert.ok(Array.isArray(r.json.data.meetings));
   assert.ok(Array.isArray(r.json.data.notes));
 });
+
+test("邮箱：状态接口在未配置时返回 configured=false，并给出配置路径", async () => {
+  const r = await api("/tidywork-api/mail/status");
+  assert.equal(r.status, 200);
+  assert.equal(r.json.data.configured, false);
+  assert.match(r.json.data.configPath, /tidywork[\s\S]*mail[\s\S]*config\.ini/);
+});
+
+test("邮箱：未配置账号时扫描返回 400 和可执行提示，不启动引擎", async () => {
+  const r = await api("/tidywork-api/mail/scan", { method: "POST", body: {} });
+  assert.equal(r.status, 400);
+  assert.match(r.json.error, /尚未配置邮箱/);
+});
+
+test("邮箱：回复不存在的会议返回 404，非邮箱来源的会议不放行", async () => {
+  const r = await api("/tidywork-api/mail/rsvp", { method: "POST", body: { id: "m_not_exist", action: "accept" } });
+  assert.equal(r.status, 404);
+
+  const created = await api("/tidywork-api/meetings", { method: "POST", body: { title: "手输会议", date: "2026-11-25", startTime: "10:00", endTime: "11:00" } });
+  assert.equal(created.status, 200);
+  const id = created.json.data.id;
+  const second = await api("/tidywork-api/mail/rsvp", { method: "POST", body: { id: id, action: "accept" } });
+  assert.equal(second.status, 404);
+  assert.match(second.json.error, /不是从邮箱同步/);
+});
+
+test("邮箱：rsvp 只接受 accept/decline", async () => {
+  const r = await api("/tidywork-api/mail/rsvp", { method: "POST", body: { id: "x", action: "maybe" } });
+  assert.equal(r.status, 400);
+});
