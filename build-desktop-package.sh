@@ -37,7 +37,7 @@ done
 # ---------- 2. 同步最新插件源码 ----------
 # v3.30 起 ui/ 静态页已删除（真前端早就在 lib/client.js 里，ui/ 是没人引用的旧原型，
 # 而 package.json#files 又没带上，装完必然 404）。这里同步的文件必须和 package.json#files 保持一致。
-FILES="package.json cordis.patch.yml icon.svg locale/zh.json lib/client.js lib/index.js lib/types/index.d.ts lib/types/client/index.d.ts"
+FILES="package.json cordis.patch.yml icon.svg locale/zh.json lib/client.js lib/index.js lib/mail.js lib/types/index.d.ts lib/types/client/index.d.ts config.example.ini"
 for f in ${FILES}; do
   [ -f "${PLUGIN_SRC}/${f}" ] || fail "插件源码缺少 ${f}"
 done
@@ -47,6 +47,18 @@ for f in ${FILES}; do
   mkdir -p "${SHARE}/plugin/$(dirname "${f}")"
   cp "${PLUGIN_SRC}/${f}" "${SHARE}/plugin/${f}"
 done
+
+# 邮箱引擎（Python，标准库即可跑通邮件扫描；CalDAV 才需要第三方库）
+# 只同步 .py 与 run.cmd，__pycache__ / config.ini 一律不带——凭据只存在用户数据目录。
+rm -rf "${SHARE}/plugin/engine"
+mkdir -p "${SHARE}/plugin/engine"
+for f in "${PLUGIN_SRC}"/engine/*.py "${PLUGIN_SRC}"/engine/run.cmd; do
+  [ -f "${f}" ] || continue
+  cp "${f}" "${SHARE}/plugin/engine/"
+done
+ENG=$(ls -1 "${SHARE}/plugin/engine"/*.py 2>/dev/null | wc -l | tr -d ' ')
+[ "${ENG}" -gt 0 ] || fail "邮箱引擎没有同步到 share-desktop/plugin/engine"
+say "邮箱引擎已同步：${ENG} 个 .py"
 CNT=0
 for f in ${FILES}; do CNT=$((CNT + 1)); done
 say "插件源码已同步：${CNT} 个文件"
@@ -59,7 +71,7 @@ grep -q "\"version\": \"${VER}\"" "${PKG}" || fail "插件 package.json 版本�
 
 # ---------- 4. 语法自检（有 node 就用，没有就跳过） ----------
 if command -v node >/dev/null 2>&1; then
-  for js in "${SHARE}/plugin/lib/client.js" "${SHARE}/plugin/lib/index.js"; do
+  for js in "${SHARE}/plugin/lib/client.js" "${SHARE}/plugin/lib/index.js" "${SHARE}/plugin/lib/mail.js"; do
     node --check "${js}" || fail "语法检查失败：${js}"
   done
   say "语法检查通过（node $(node -v)）"

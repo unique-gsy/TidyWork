@@ -24,6 +24,7 @@ import { dirname, join, sep } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
+import { createMailModule } from "./mail.js";
 
 /** Cordis 插件名（loader 诊断用）。 */
 const name = "tidywork";
@@ -1335,6 +1336,9 @@ const WORKSPACE_PROMPT = {
     "用户没给的字段不要编造：缺标题就先问，缺时间就按当天最接近的整点提示确认；一次只补齐真正必要的信息。",
     "修改已有条目可以直接做：先 GET 读出清单（如 `sh tw GET /meetings`），确认用户指的是哪一条，再局部更新——待办 PATCH /todos/<id>（可改 title / priority / category / due / done）；会议 PATCH /meetings/<id>（可改 title / date / startTime / endTime / location / participants）；笔记 PUT /notes/<id>（content / title / tags / pinned / format 都可局部改，但要先 GET /notes/<id> 拿到当前 rev 并原样回传 rev，否则会和用户在面板里的编辑撞车；返回 409 表示这篇已被别处改过，重新 GET 再决定合并方式）。改完把改动复述一遍让用户确认。",
     "删除必须先问清楚是哪一条、确认之后才删（DELETE 同一个路径）。不要自己判断「这条应该没用了」就删。",
+    "- 邮箱：用户说「扫描邮箱 / 看看邮箱有什么要处理的」时用 tidywork_mail_scan（默认近 7 天邮件 + 日历），跑完会把结果同步进待办与会议面板，正在面板里能直接看到。",
+    "- 邮箱清单相关：处理完了用 tidywork_mail_done；会议邀请用 tidywork_mail_rsvp（accept 确认参加 / decline 拒绝并移出）；只想先记一笔、不建会议也不建待办时用 tidywork_mail_add；要看原始清单用 tidywork_mail_list。",
+    "- 邮箱抓来的条目带 source.type = \"mail\"（含邮件主题与发件人），面板与统计里归为「来自邮箱」；改它们的标题、截止日没问题，但不要把它们改成手动来源，也不要凭空编造 mailKey。",
     "与工作项无关的话题按平常方式回答，不必主动提起本工作区。",
   ].join("\n"),
 };
@@ -1526,9 +1530,21 @@ async function apply(ctx) {
       await writeStatus({ workspaceError: "workspaceRegistry 不可用" });
     }
 
-    // Agent 工具：会话中通过自然语言新增待办/会议/笔记。
+    // 邮箱模块：调用 engine/ Python 引擎，把邮件/日历抽出的待办与会议投影进同一个工作区。
+    // 配置（含授权码）与清单状态都放数据目录 <dataRoot>/mail/，插件目录只读、交付包只带模板。
+    const mail = createMailModule({
+      dataRoot,
+      withQueue,
+      readStore,
+      saveStore,
+      rid,
+      localStamp
+    });
+
+    // Agent 工具：会话中通过自然语言新增待办/会议/笔记，以及邮箱扫描/回复邀请。
     if (services.tools) {
-      const disposers = [TODO_ADD_TOOL, MEETING_ADD_TOOL, NOTE_ADD_TOOL].map((tool) => {
+      const toolList = [TODO_ADD_TOOL, MEETING_ADD_TOOL, NOTE_ADD_TOOL].concat(mail.tools || []);
+      const disposers = toolList.map((tool) => {
         try { return ctx.tools.register(tool); } catch (error) {
           logError("注册工具 " + tool.name + " 失败：" + String(error && error.message ? error.message : error));
           return () => {};
