@@ -260,3 +260,23 @@ test("邮箱：rsvp 只接受 accept/decline", async () => {
   const r = await api("/tidywork-api/mail/rsvp", { method: "POST", body: { id: "x", action: "maybe" } });
   assert.equal(r.status, 400);
 });
+
+test("邮箱：设置接口拒绝坏账号，只存账号时 configured 仍为 false", async () => {
+  const bad = await api("/tidywork-api/mail/config", { method: "POST", body: { email: "not-an-email", authCode: "" } });
+  assert.equal(bad.status, 400);
+
+  const saved = await api("/tidywork-api/mail/config", { method: "POST", body: { email: "737081914@qq.com", authCode: "", withSelfCheck: false } });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.json.data.configured, false);
+  assert.match(saved.json.data.text, /授权码留空/);
+
+  const status = await api("/tidywork-api/mail/status");
+  assert.equal(status.json.data.email, "737081914@qq.com");
+  assert.equal(status.json.data.hasAuthCode, false);
+  assert.equal(status.json.data.configured, false);
+});
+
+test("邮箱：设置接口不接受 GET", async () => {
+  const r = await api("/tidywork-api/mail/config");
+  assert.equal(r.status, 405);
+});

@@ -672,13 +672,39 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		 * 「扫描邮箱」按钮：调 /tidywork-api/mail/scan（服务端跑 Python 引擎，可能几十秒）。
-		 * 结果只回一句摘要，具体条目由各面板重新拉取数据展示。
+		 * 邮箱区（工作台顶栏）：状态 + 扫描 / 设置入口。
+		 * - 扫描：POST /tidywork-api/mail/scan，服务端跑 Python 引擎，可能几十秒。
+		 * - 设置：弹窗里填账号/授权码，POST /tidywork-api/mail/config，保存后顺手自检。
+		 * 未配置时按钮变成「配置邮箱」并直接开弹窗，避免点出看不懂的报错。
 		 */
-		function MailScanButton(props) {
+		function MailBar(props) {
+			const [status, setStatus] = useState(null);
 			const [busy, setBusy] = useState(false);
-			const run = () => {
+			const [open, setOpen] = useState(false);
+			const [email, setEmail] = useState("");
+			const [code, setCode] = useState("");
+			const [result, setResult] = useState("");
+			const [saving, setSaving] = useState(false);
+
+			const refresh = () =>
+				api("/tidywork-api/mail/status")
+					.then((d) => {
+						setStatus(d || null);
+						if (d && d.email) setEmail(d.email);
+					})
+					.catch(() => setStatus(null));
+
+			useEffect(() => { refresh(); }, []);
+
+			const configured = !!(status && status.configured);
+			const hint = "QQ 邮箱 → 设置 → 账户 → 开启 IMAP/SMTP 服务 → 生成授权码；旧授权码请先在列表里作废";
+
+			const scan = () => {
 				if (busy) return;
+				if (!configured) {
+					setOpen(true);
+					return;
+				}
 				setBusy(true);
 				toast("正在扫描邮箱（邮件 + 日历），通常需要 10–60 秒…");
 				api("/tidywork-api/mail/scan", { method: "POST", body: JSON.stringify({ days: 7 }), timeoutMs: 180000 })
@@ -690,16 +716,100 @@ window.__ModuleLoader__.load({
 					.catch((e) => toast(e.message))
 					.then(() => setBusy(false));
 			};
+
+			const save = () => {
+				if (saving) return;
+				setSaving(true);
+				setResult("");
+				api("/tidywork-api/mail/config", { method: "POST", body: JSON.stringify({ email: email, authCode: code, withSelfCheck: true }), timeoutMs: 120000 })
+					.then((d) => {
+						setResult((d && d.text) || "已保存");
+						setCode("");
+						toast(d && d.configured ? "邮箱已配置" : "账号已保存，授权码留空");
+						if (d && d.configured && props && props.onDone) props.onDone();
+						return refresh();
+					})
+					.catch((e) => setResult(e.message))
+					.then(() => setSaving(false));
+			};
+
 			return h(
-				"button",
-				{
-					type: "button",
-					onClick: run,
-					disabled: busy,
-					title: "从邮箱抓取待办与会议；首次使用需在数据目录的 mail/config.ini 填邮箱账号",
-					style: Object.assign({}, S.btnGhost, { opacity: busy ? 0.6 : 1, cursor: busy ? "default" : "pointer" })
-				},
-				busy ? "扫描中…" : "扫描邮箱"
+				"span",
+				{ style: { display: "inline-flex", alignItems: "center", gap: 8 } },
+				h(
+					"button",
+					{
+						type: "button",
+						onClick: scan,
+						disabled: busy,
+						title: configured ? "从邮箱抓取待办与会议" : "先配置邮箱账号与授权码",
+						style: Object.assign({}, S.btnGhost, { opacity: busy ? 0.6 : 1, cursor: busy ? "default" : "pointer" })
+					},
+					busy ? "扫描中…" : configured ? "扫描邮箱" : "配置邮箱"
+				),
+				h(
+					"button",
+					{ type: "button", onClick: () => setOpen(true), title: configured ? "修改邮箱账号或授权码" : hint, style: S.btnGhost },
+					configured ? "邮箱设置" : "邮箱设置 ⚠"
+				),
+				h(
+					Modal,
+					{ open: open, title: "邮箱设置", onClose: () => { setOpen(false); setResult(""); } },
+					h(
+						Field,
+						{ label: "邮箱账号" },
+						h("input", {
+							style: S.input,
+							type: "email",
+							maxLength: 120,
+							autoComplete: "off",
+							spellCheck: false,
+							placeholder: "例如 737081914@qq.com",
+							value: email,
+							onChange: (e) => setEmail(e.target.value)
+						})
+					),
+					h(
+						Field,
+						{ label: "授权码（16 位；留空 = 暂时关闭邮箱扫描）" },
+						h("input", {
+							style: S.input,
+							type: "password",
+							maxLength: 32,
+							autoComplete: "new-password",
+							spellCheck: false,
+							placeholder: status && status.hasAuthCode ? "已保存，如需更换请重新填写" : "粘贴新的授权码",
+							value: code,
+							onChange: (e) => setCode(e.target.value),
+							onKeyDown: (e) => { if (e.key === "Enter") save(); }
+						})
+					),
+					h("div", { style: { fontSize: 12, color: C.text2, lineHeight: 1.6, marginBottom: 8 } }, hint),
+					h("div", { style: { fontSize: 12, color: C.text2, lineHeight: 1.6, marginBottom: 10 } }, "授权码只写进数据目录的 mail/config.ini（600 权限），不进插件包，也不随导出文件外发。"),
+					result
+						? h(
+								"div",
+								{
+									style: {
+										fontSize: 12, lineHeight: 1.6, color: C.text1, background: C.page, border: "1px solid " + C.border,
+										borderRadius: 6, padding: 10, marginBottom: 10, maxHeight: 220, overflowY: "auto",
+										whiteSpace: "pre-wrap", wordBreak: "break-word"
+									}
+								},
+								result
+							)
+						: null,
+					h(
+						"div",
+						{ style: S.footRow },
+						h("button", { type: "button", onClick: () => { setOpen(false); setResult(""); }, style: S.btnGhost }, "关闭"),
+						h(
+							"button",
+							{ type: "button", onClick: save, disabled: saving, style: Object.assign({}, S.btnPrimary, { opacity: saving ? 0.6 : 1, cursor: saving ? "default" : "pointer" }) },
+							saving ? "保存中…" : "保存并自检"
+						)
+					)
+				)
 			);
 		}
 
@@ -3510,7 +3620,7 @@ window.__ModuleLoader__.load({
 							},
 							"＋ 新建工作项"
 						),
-						h(MailScanButton, { onDone: reload }),
+						h(MailBar, { onDone: reload }),
 						h("button", { type: "button", onClick: exportAll, title: "导出全部数据为 JSON 备份", style: S.btnGhost }, "导出")
 					)
 				),

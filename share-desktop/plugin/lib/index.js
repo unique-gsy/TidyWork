@@ -818,6 +818,30 @@ async function routeCore(req, res, url) {
       }
       return;
     }
+    // 保存邮箱账号 / 授权码：只写数据目录的 config.ini（mode 600），输入不做任何拼接进 shell。
+    // 授权码可以不传（= 只存账号、邮箱保持关闭）；账号格式与授权码字符集在 mail.js 里校验。
+    if (segs.length === 3 && action === "config") {
+      if (req.method !== "POST") {
+        sendJson(res, 405, { ok: false, error: "method not allowed" });
+        return;
+      }
+      try {
+        const body = await readJson(req).catch(() => ({}));
+        const email = textField(body.email, 120, "邮箱账号");
+        const authCode = typeof body.authCode === "string" ? body.authCode : "";
+        const displayName = typeof body.displayName === "string" ? body.displayName : "";
+        const result = await mailModule.saveConfig({ email: email, authCode: authCode, displayName: displayName, withSelfCheck: body.withSelfCheck !== false });
+        if (!result.ok) {
+          sendJson(res, 400, { ok: false, error: result.text });
+          return;
+        }
+        logInfo("邮箱配置已保存：" + JSON.stringify({ email: result.email, configured: result.configured }));
+        sendJson(res, 200, { ok: true, data: { configured: result.configured, email: result.email, text: result.text } });
+      } catch (error) {
+        serverError(res, error);
+      }
+      return;
+    }
     if (segs.length === 3 && action === "scan") {
       if (req.method !== "POST") {
         sendJson(res, 405, { ok: false, error: "method not allowed" });
@@ -1408,7 +1432,7 @@ const WORKSPACE_PROMPT = {
     "用户没给的字段不要编造：缺标题就先问，缺时间就按当天最接近的整点提示确认；一次只补齐真正必要的信息。",
     "修改已有条目可以直接做：先 GET 读出清单（如 `sh tw GET /meetings`），确认用户指的是哪一条，再局部更新——待办 PATCH /todos/<id>（可改 title / priority / category / due / done）；会议 PATCH /meetings/<id>（可改 title / date / startTime / endTime / location / participants）；笔记 PUT /notes/<id>（content / title / tags / pinned / format 都可局部改，但要先 GET /notes/<id> 拿到当前 rev 并原样回传 rev，否则会和用户在面板里的编辑撞车；返回 409 表示这篇已被别处改过，重新 GET 再决定合并方式）。改完把改动复述一遍让用户确认。",
     "删除必须先问清楚是哪一条、确认之后才删（DELETE 同一个路径）。不要自己判断「这条应该没用了」就删。",
-    "- 邮箱：用户说「扫描邮箱 / 看看邮箱有什么要处理的」时用 tidywork_mail_scan（默认近 7 天邮件 + 日历），跑完会把结果同步进待办与会议面板，正在面板里能直接看到。",
+    "- 邮箱：用户说「扫描邮箱 / 看看邮箱有什么要处理的」时用 tidywork_mail_scan（默认近 7 天邮件 + 日历），跑完会把结果同步进待办与会议面板，正在面板里能直接看到。若工具返回「尚未配置邮箱」，不要让他手改 config.ini，直接告诉他：工作台顶栏的「邮箱设置」里填邮箱账号和 16 位授权码、点「保存并自检」即可。",
     "- 邮箱清单相关：处理完了用 tidywork_mail_done；会议邀请用 tidywork_mail_rsvp（accept 确认参加 / decline 拒绝并移出）；只想先记一笔、不建会议也不建待办时用 tidywork_mail_add；要看原始清单用 tidywork_mail_list。",
     "- 邮箱抓来的条目带 source.type = \"mail\"（含邮件主题与发件人），面板与统计里归为「来自邮箱」；改它们的标题、截止日没问题，但不要把它们改成手动来源，也不要凭空编造 mailKey。",
     "与工作项无关的话题按平常方式回答，不必主动提起本工作区。",

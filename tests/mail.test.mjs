@@ -233,3 +233,32 @@ test("兼容旧版数据：mail_key/urgent/normal/中文 rsvp 会被归一，不
     await rm(root, { recursive: true, force: true });
   }
 });
+
+// 邮箱设置弹窗背后的保存逻辑：写 config.ini、授权码可留空、拒绝坏账号
+test("saveConfig：写配置、留空授权码=未配置、坏账号被拒", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tw-mail-cfg-"));
+  try {
+    const mail = createMailModule(fakeDeps(root));
+    const bad = await mail.saveConfig({ email: "not-an-email", authCode: "abcdef" });
+    assert.equal(bad.ok, false);
+
+    const onlyEmail = await mail.saveConfig({ email: "737081914@qq.com" });
+    assert.equal(onlyEmail.ok, true);
+    assert.equal(onlyEmail.configured, false);
+
+    const status = await mail.status();
+    assert.equal(status.configured, false, "没有授权码就不算配置完成");
+    assert.equal(status.email, "737081914@qq.com");
+    assert.equal(status.hasAuthCode, false);
+
+    const text = await readFile(join(root, "mail", "config.ini"), "utf8");
+    assert.match(text, /email = 737081914@qq\.com/);
+    assert.match(text, /auth_code =\s*\n/, "授权码行应为空");
+
+    const withCode = await mail.saveConfig({ email: "737081914@qq.com", authCode: "abcdefghijklmnop", withSelfCheck: false });
+    assert.equal(withCode.configured, true);
+    assert.equal((await mail.status()).hasAuthCode, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

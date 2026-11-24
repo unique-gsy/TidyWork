@@ -185,17 +185,77 @@ async function ensureConfig(dataRoot) {
   return { path };
 }
 
-/** 配置文件里是否已经填了邮箱账号（不理解内容，只判断非空）。 */
-async function configFilled(dataRoot) {
+/** 读配置文件里的 [account] 段（只取需要展示/校验的三个键，不外泄完整文件）。 */
+async function readAccount(dataRoot) {
   const path = join(mailDir(dataRoot), "config.ini");
   try {
     const text = await readFile(path, "utf8");
-    const email = (/email\s*=\s*([^\n]*)/i.exec(text) || [])[1] || "";
-    const code = (/auth_code\s*=\s*([^\n]*)/i.exec(text) || [])[1] || "";
-    return Boolean(email.trim() && code.trim());
+    // 模板里的占位值不算填过（老版本模板留过 your_name@qq.com / your_16_char_auth_code）
+    const PLACEHOLDER = ["your_name@qq.com", "your_16_char_auth_code"];
+    const read = (key) => {
+      const v = ((new RegExp("^[ \\t]*" + key + "[ \\t]*=[ \\t]*(.*)$", "im").exec(text)) || [])[1] || "";
+      const s = v.trim();
+      return PLACEHOLDER.includes(s) ? "" : s;
+    };
+    const email = read("email");
+    const code = read("auth_code");
+    const displayName = read("display_name");
+    return { email, code, displayName, exists: true };
   } catch (error) {
-    return false;
+    return { email: "", code: "", displayName: "", exists: false };
   }
+}
+
+/** 配置文件里是否已经填了邮箱账号（不理解内容，只判断非空）。 */
+async function configFilled(dataRoot) {
+  const acct = await readAccount(dataRoot);
+  return Boolean(acct.email.trim() && acct.code.trim());
+}
+
+/**
+ * 在插件设置里保存邮箱账号与授权码（写数据目录的 config.ini，mode 600）。
+ * 授权码允许留空 = 只填账号、暂不启用邮箱模块。
+ * withSelfCheck=true 时顺手跑一次引擎自检，把结果文本回给界面。
+ */
+async function saveMailConfig(deps, input) {
+  const email = String((input && input.email) || "").trim().toLowerCase();
+  if (!email) return { ok: false, configured: false, text: "邮箱账号不能为空" };
+  if (!/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(email)) {
+    return { ok: false, configured: false, text: "邮箱账号格式不正确，例如 737081914@qq.com" };
+  }
+  const code = String((input && input.authCode) || "").replace(/\s+/g, "");
+  if (code && !/^[A-Za-z0-9]{6,32}$/.test(code)) {
+    return { ok: false, configured: false, text: "授权码应为 16 位字母数字（QQ 邮箱 → 设置 → 账户 → 生成授权码）" };
+  }
+  const displayName = String((input && input.displayName) || "").trim().slice(0, 60);
+
+  const { path } = await ensureConfig(deps.dataRoot);
+  let text = await readFile(path, "utf8");
+  const put = (src, key, val) => {
+    const re = new RegExp("^([ \\t]*" + key + ")[ \\t]*=[ \\t]*.*$", "im");
+    if (re.test(src)) return src.replace(re, (m, p1) => p1 + " = " + val);
+    return (src.endsWith("\n") ? src : src + "\n") + key + " = " + val + "\n";
+  };
+  text = put(text, "email", email);
+  text = put(text, "auth_code", code);
+  if (displayName) text = put(text, "display_name", displayName);
+
+  await writeFile(path, text, "utf8");
+  try {
+    await chmod(path, 0o600);
+  } catch (error) {
+    // Windows 上 chmod 不生效，忽略
+  }
+
+  const configured = Boolean(email && code);
+  if (!configured) {
+    return { ok: true, configured: false, email, text: "账号已保存。授权码留空，邮箱扫描保持关闭——拿到授权码后再填一次即可。" };
+  }
+  if (!(input && input.withSelfCheck === false)) {
+    const engine = await runEngine(["self-check"], deps.dataRoot);
+    return { ok: true, configured: true, email, selfCheckOk: engine.ok, text: engine.text };
+  }
+  return { ok: true, configured: true, email, text: "已保存。可点「扫描邮箱」验证连通性。" };
 }
 
 // ---------------------------------------------------------------------------
@@ -404,7 +464,7 @@ async function scanOnce(deps, opts) {
     const path = join(mailDir(deps.dataRoot), "config.ini");
     return {
       ok: false,
-      text: "尚未配置邮箱：请把 " + path + " 里的 email 与 auth_code 填好（QQ 邮箱 → 设置 → 账号 → 开启 IMAP 后获取授权码），再重试。"
+      text: "尚未配置邮箱：打开工作台顶栏的「邮箱设置」，填邮箱账号和 16 位授权码后点「保存并自检」即可（QQ 邮箱 → 设置 → 账户 → 开启 IMAP/SMTP 服务后生成授权码）。配置文件位置：" + path
     };
   }
   const days = safeInt(opts && opts.days, 1, 90, 7);
@@ -473,8 +533,11 @@ async function mailStatus(deps) {
   } catch (error) {
     state = null;
   }
+  const acct = await readAccount(deps.dataRoot);
   return {
-    configured: await configFilled(deps.dataRoot),
+    configured: Boolean(acct.email && acct.code),
+    email: acct.email,
+    hasAuthCode: Boolean(acct.code),
     lastScan: state && state.updated_at ? state.updated_at : "",
     items: state && Array.isArray(state.items) ? state.items.length : 0,
     configPath: join(mailDir(deps.dataRoot), "config.ini")
@@ -681,6 +744,7 @@ export function createMailModule(deps) {
     scan: (opts) => scanMail(d, opts || {}),
     rsvp: (args) => rsvpMail(d, args || {}),
     status: () => mailStatus(d),
+    saveConfig: (input) => saveMailConfig(d, input || {}),
     configPath: () => join(mailDir(root), "config.ini"),
     statePath: () => statePath(root)
   };
