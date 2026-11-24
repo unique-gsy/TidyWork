@@ -237,8 +237,13 @@ window.__ModuleLoader__.load({
 		/** 给会话改名（宿主 rename 走 workspaceOperation 通道，和它自己重命名弹窗同一个入口）。 */
 		async function renameSessionTo(ctx, id, title) {
 			if (!ctx.sessions || !ctx.sessions.using) throw new Error("宿主会话服务不可用");
-			const res = await ctx.sessions.using(id, { source: "workspaceOperation" }, (ref) => ref.binding.session.rename(title));
+			const res = await ctx.sessions.using(id, { source: "workspaceOperation" }, (ref) => {
+				const b = ref && ref.binding;
+				if (!b || !b.session || typeof b.session.rename !== "function") throw new Error("session.rename 不可用：" + Object.keys(b || {}).join(","));
+				return b.session.rename(title);
+			});
 			if (res && res.ok === false) throw new Error((res.error && res.error.message) || "会话改名失败");
+			return res;
 		}
 		/**
 		 * TidyWork 工作区里"今天"的会话：标题就是 yyyy-mm-dd。
@@ -248,29 +253,50 @@ window.__ModuleLoader__.load({
 		async function ensureTodaySession(ctx, ws, today) {
 			const ids = Array.isArray(ws.sessionIds) ? ws.sessionIds : [];
 			const byId = sessionIndex(ctx);
-			const titled = ids.find((id) => byId[id] && String(byId[id].title || "").trim() === today);
+			const titleOf = (id) => String((byId[id] || {}).title || "").trim();
+			const titled = ids.find((id) => byId[id] && titleOf(id) === today);
 			if (titled) {
 				writeTodaySession(titled);
 				return titled;
 			}
-			const rec = readTodaySession();
-			if (rec && rec.d === today && ids.indexOf(rec.id) !== -1) return rec.id;
-			// 一律用 connectWorkspace：它只在指定工作区里建/复用空白会话；
-			// sessions.create 会跨工作区复用"空白会话"，容易把别处的草稿连工作区一起拖过来。
 			let sid = null;
-			try {
-				sid = await ctx.uiWorkspace.connectWorkspace(ws.workspaceId);
-			} catch (e) {
-				if (ctx.sessions && typeof ctx.sessions.create === "function") {
-					sid = await ctx.sessions.create({ workspaceId: ws.workspaceId });
-				} else {
-					throw e;
+			const rec = readTodaySession();
+			const reusable = rec && rec.d === today && ids.indexOf(rec.id) !== -1 ? rec.id : null;
+			if (reusable) {
+				// 同一天已记过这个会话：直接复用，但标题可能还是「新会话」，下面统一改名
+				sid = reusable;
+			} else {
+				// 一律用 connectWorkspace：它只在指定工作区里建/复用空白会话；
+				// sessions.create 会跨工作区复用"空白会话"，容易把别处的草稿连工作区一起拖过来。
+				try {
+					sid = await ctx.uiWorkspace.connectWorkspace(ws.workspaceId);
+				} catch (e) {
+					if (ctx.sessions && typeof ctx.sessions.create === "function") {
+						sid = await ctx.sessions.create({ workspaceId: ws.workspaceId });
+					} else {
+						throw e;
+					}
+				}
+				// 刚建出来的会话还没进客户端目录，这时 using() 拿不到 binding；
+				// 先等它出现在会话列表里，再改名。
+				for (let i = 0; i < 12; i++) {
+					if (sessionIndex(ctx)[sid]) break;
+					await sleep(150);
 				}
 			}
-			try {
-				await renameSessionTo(ctx, sid, today);
-			} catch (e) {
-				console.warn("[tidywork] 今日会话改名失败：", (e && e.message) || e);
+			if (titleOf(sid) !== today) {
+				let renamed = false;
+				let lastError = null;
+				for (let i = 0; i < 6 && !renamed; i++) {
+					try {
+						await renameSessionTo(ctx, sid, today);
+						renamed = true;
+					} catch (e) {
+						lastError = e;
+						await sleep(300);
+					}
+				}
+				if (!renamed) console.warn("[tidywork] 今日会话改名失败：", (lastError && lastError.message) || lastError);
 			}
 			writeTodaySession(sid);
 			return sid;
@@ -287,11 +313,12 @@ window.__ModuleLoader__.load({
 				}
 				const today = ymdLocal(new Date());
 				const sid = await ensureTodaySession(ctx, ws, today);
+				toast("已打开今日工作项 " + today);
 				ctx.uiWorkspace.openSession(sid);
 			} catch (e) {
 				// 桌面端 web/容器等拿不到工作区服务时，不要让「＋新增」变成点了没反应：直接开页内弹窗
 				if (fallback) { fallback(); return; }
-				toast("打不开今日会话：" + ((e && e.message) || "未知错误"));
+				toast("打开今日工作项失败：" + ((e && e.message) || "未知错误"));
 			}
 		}
 
@@ -3679,7 +3706,7 @@ window.__ModuleLoader__.load({
 		};
 
 		// ===== 客户端插件注册 =====
-		const inject = ["slots", "locale", "layout", "workspaces", "uiWorkspace"];
+		const inject = ["slots", "locale", "layout", "workspaces", "uiWorkspace", "sessions"];
 		const NS = "tidywork";
 		const HOME = { id: "tidywork-home", order: -10, labelKey: "home" };
 		const PANELS = [
