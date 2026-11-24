@@ -511,11 +511,11 @@ window.__ModuleLoader__.load({
 			return { status, statusText: status === "done" ? "已结束" : status === "now" ? "进行中" : "未开始" };
 		}
 
-		/** 会议时间文本：优先结构化 startTime/endTime，老数据的 duration 自由文本兜底。 */
+		/** 会议时间文本：优先结构化 startTime/endTime；开始等于结束时只显示一个时刻（老数据常见）。 */
 		function meetingTimeText(m) {
 			const s = String(m.startTime || m.time || "");
 			const e = String(m.endTime || "");
-			if (s && e) return s + " - " + e;
+			if (s && e && s !== e) return s + " - " + e;
 			if (s) return s;
 			return String(m.duration || "");
 		}
@@ -533,7 +533,8 @@ window.__ModuleLoader__.load({
 					a.click();
 					a.remove();
 					setTimeout(() => URL.revokeObjectURL(url), 1000);
-					toast("已导出备份（JSON）");
+					// 不在这里弹「已导出」：系统保存对话框还没关，用户点取消就是一句假成功。
+					// 是否真的落盘由保存对话框自己反馈，这里只在请求失败时提示。
 				})
 				.catch((e) => toast("导出失败：" + e.message));
 		}
@@ -1549,12 +1550,7 @@ window.__ModuleLoader__.load({
 																		h("path", { d: "M16 3.13a4 4 0 0 1 0 7.75" })
 																	),
 																	m.participants + " 人参会"
-																),
-																		h(
-																			"span",
-																			{ title: "把这场会的跟进项加入待办", style: { marginLeft: "auto", fontSize: 11.5, color: C.accent, cursor: "pointer" }, onClick: () => todoFromMeeting(m) },
-																			"生成待办 →"
-																		)
+																)
 															)
 														)
 													);
