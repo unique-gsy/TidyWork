@@ -671,6 +671,19 @@ window.__ModuleLoader__.load({
 			);
 		}
 
+			/** 引擎报错原文对用户太硬：能认出来的常见错误换成一句人话，认不出来的原样保留。 */
+			function prettyMailError(msg) {
+				const raw = String(msg || "");
+				if (/AUTHENTICATIONFAILED|Login fail|登录失败/i.test(raw)) {
+					return "IMAP 登录失败：授权码可能已失效，或 QQ 邮箱里 IMAP/SMTP 服务没开。去 QQ 邮箱作废旧码、生成新码，填到下面再保存一次。";
+				}
+				if (/timed out|ETIMEDOUT|ENOTFOUND|ECONNREFUSED/i.test(raw)) {
+					return "连不上邮箱服务器（网络或代理问题），稍后重试；若一直失败请检查网络。";
+				}
+				if (/尚未配置|未配置/i.test(raw)) return "还没配邮箱：填好邮箱账号和 16 位授权码，保存即可。";
+				return raw;
+			}
+
 		/**
 		 * 邮箱区（工作台顶栏）：状态 + 扫描 / 设置入口。
 		 * - 扫描：POST /tidywork-api/mail/scan，服务端跑 Python 引擎，可能几十秒。
@@ -713,7 +726,16 @@ window.__ModuleLoader__.load({
 						toast("已扫描：待办 +" + (s.todos || 0) + " · 会议 +" + (s.meetings || 0));
 						if (props && props.onDone) props.onDone();
 					})
-					.catch((e) => toast(e.message))
+					.catch((e) => {
+						const msg = e && e.message ? e.message : String(e);
+						// 凭据问题（没配 / 授权码失效 / 登录被拒）直接把设置弹窗摆出来，省得用户到处找入口
+						if (/尚未配置|未配置|授权码|认证|登录|LOGIN|AUTH/i.test(msg)) {
+							setResult(prettyMailError(msg));
+							setOpen(true);
+						} else {
+							toast(msg);
+						}
+					})
 					.then(() => setBusy(false));
 			};
 
@@ -729,7 +751,7 @@ window.__ModuleLoader__.load({
 						if (d && d.configured && props && props.onDone) props.onDone();
 						return refresh();
 					})
-					.catch((e) => setResult(e.message))
+					.catch((e) => setResult(prettyMailError(e && e.message ? e.message : e)))
 					.then(() => setSaving(false));
 			};
 
@@ -742,15 +764,10 @@ window.__ModuleLoader__.load({
 						type: "button",
 						onClick: scan,
 						disabled: busy,
-						title: configured ? "从邮箱抓取待办与会议" : "先配置邮箱账号与授权码",
+						title: configured ? "从邮箱抓取待办与会议；授权码失效时点它会自动打开设置" : "先配置邮箱账号与授权码",
 						style: Object.assign({}, S.btnGhost, { opacity: busy ? 0.6 : 1, cursor: busy ? "default" : "pointer" })
 					},
 					busy ? "扫描中…" : configured ? "扫描邮箱" : "配置邮箱"
-				),
-				h(
-					"button",
-					{ type: "button", onClick: () => setOpen(true), title: configured ? "修改邮箱账号或授权码" : hint, style: S.btnGhost },
-					configured ? "邮箱设置" : "邮箱设置 ⚠"
 				),
 				h(
 					Modal,
