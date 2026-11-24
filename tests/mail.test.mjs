@@ -242,22 +242,43 @@ test("saveConfig：写配置、留空授权码=未配置、坏账号被拒", asy
     const bad = await mail.saveConfig({ email: "not-an-email", authCode: "abcdef" });
     assert.equal(bad.ok, false);
 
-    const onlyEmail = await mail.saveConfig({ email: "737081914@qq.com" });
+    const onlyEmail = await mail.saveConfig({ email: "someone@example.com" });
     assert.equal(onlyEmail.ok, true);
     assert.equal(onlyEmail.configured, false);
 
     const status = await mail.status();
     assert.equal(status.configured, false, "没有授权码就不算配置完成");
-    assert.equal(status.email, "737081914@qq.com");
+    assert.equal(status.email, "someone@example.com");
     assert.equal(status.hasAuthCode, false);
 
     const text = await readFile(join(root, "mail", "config.ini"), "utf8");
-    assert.match(text, /email = 737081914@qq\.com/);
+    assert.match(text, /email = someone@example\.com/);
     assert.match(text, /auth_code =\s*\n/, "授权码行应为空");
 
-    const withCode = await mail.saveConfig({ email: "737081914@qq.com", authCode: "abcdefghijklmnop", withSelfCheck: false });
+    const withCode = await mail.saveConfig({ email: "someone@example.com", authCode: "abcdefghijklmnop", withSelfCheck: false });
     assert.equal(withCode.configured, true);
     assert.equal((await mail.status()).hasAuthCode, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// 清除账号：接口能一次抹掉 email 与授权码，回到未配置，不需要手改文件
+test("saveConfig：clear=true 抹掉账号与授权码", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tw-mail-clear-"));
+  try {
+    const mail = createMailModule(fakeDeps(root));
+    await mail.saveConfig({ email: "someone@example.com", authCode: "abcdefghijklmnop", withSelfCheck: false });
+    assert.equal((await mail.status()).configured, true);
+
+    const cleared = await mail.saveConfig({ clear: true });
+    assert.equal(cleared.ok, true);
+    assert.equal(cleared.configured, false);
+    assert.equal((await mail.status()).email, "");
+    assert.equal((await mail.status()).hasAuthCode, false);
+
+    const text = await readFile(join(root, "mail", "config.ini"), "utf8");
+    assert.equal(/^[ \t]*auth_code[ \t]*=[ \t]*\S/m.test(text), false, "授权码行应为空");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

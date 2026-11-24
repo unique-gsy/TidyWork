@@ -218,10 +218,24 @@ async function configFilled(dataRoot) {
  * withSelfCheck=true 时顺手跑一次引擎自检，把结果文本回给界面。
  */
 async function saveMailConfig(deps, input) {
+  // clear=true：把账号和授权码一起抹掉，回到「未配置」状态（不需要用户手改文件）
+  if (input && input.clear === true) {
+    const { path } = await ensureConfig(deps.dataRoot);
+    let text = await readFile(path, "utf8");
+    text = text.replace(/^([ \t]*email)[ \t]*=[ \t]*.*$/im, "$1 =");
+    text = text.replace(/^([ \t]*auth_code)[ \t]*=[ \t]*.*$/im, "$1 =");
+    await writeFile(path, text, "utf8");
+    try {
+      await chmod(path, 0o600);
+    } catch (error) {
+      // Windows 上 chmod 不生效，忽略
+    }
+    return { ok: true, configured: false, email: "", text: "已清除已保存的邮箱账号与授权码。" };
+  }
   const email = String((input && input.email) || "").trim().toLowerCase();
   if (!email) return { ok: false, configured: false, text: "邮箱账号不能为空" };
   if (!/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(email)) {
-    return { ok: false, configured: false, text: "邮箱账号格式不正确，例如 737081914@qq.com" };
+    return { ok: false, configured: false, text: "邮箱账号格式不正确，形如 your_name@qq.com" };
   }
   const code = String((input && input.authCode) || "").replace(/\s+/g, "");
   if (code && !/^[A-Za-z0-9]{6,32}$/.test(code)) {

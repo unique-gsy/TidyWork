@@ -701,11 +701,21 @@ window.__ModuleLoader__.load({
 
 			const refresh = () =>
 				api("/tidywork-api/mail/status")
+					.then((d) => setStatus(d || null))
+					.catch(() => setStatus(null));
+
+			/** 打开设置弹窗：每次现拉一次状态再回填，避免账号被清除后仍显示旧值。 */
+			const openSettings = (reason) => {
+				if (reason) setResult(reason);
+				setCode("");
+				setOpen(true);
+				api("/tidywork-api/mail/status")
 					.then((d) => {
 						setStatus(d || null);
-						if (d && d.email) setEmail(d.email);
+						setEmail((d && d.email) || "");
 					})
-					.catch(() => setStatus(null));
+					.catch(() => {});
+			};
 
 			useEffect(() => { refresh(); }, []);
 
@@ -715,7 +725,7 @@ window.__ModuleLoader__.load({
 			const scan = () => {
 				if (busy) return;
 				if (!configured) {
-					setOpen(true);
+					openSettings();
 					return;
 				}
 				setBusy(true);
@@ -730,13 +740,27 @@ window.__ModuleLoader__.load({
 						const msg = e && e.message ? e.message : String(e);
 						// 凭据问题（没配 / 授权码失效 / 登录被拒）直接把设置弹窗摆出来，省得用户到处找入口
 						if (/尚未配置|未配置|授权码|认证|登录|LOGIN|AUTH/i.test(msg)) {
-							setResult(prettyMailError(msg));
-							setOpen(true);
+							openSettings(prettyMailError(msg));
 						} else {
 							toast(msg);
 						}
 					})
 					.then(() => setBusy(false));
+			};
+
+			const clearAccount = () => {
+				if (saving) return;
+				setSaving(true);
+				setResult("");
+				api("/tidywork-api/mail/config", { method: "POST", body: JSON.stringify({ clear: true, withSelfCheck: false }), timeoutMs: 30000 })
+					.then((d) => {
+						setEmail("");
+						setCode("");
+						setResult((d && d.text) || "已清除");
+						return refresh();
+					})
+					.catch((e) => setResult(prettyMailError(e && e.message ? e.message : e)))
+					.then(() => setSaving(false));
 			};
 
 			const save = () => {
@@ -781,7 +805,7 @@ window.__ModuleLoader__.load({
 							maxLength: 120,
 							autoComplete: "off",
 							spellCheck: false,
-							placeholder: "例如 737081914@qq.com",
+							placeholder: "例如 your_name@qq.com",
 							value: email,
 							onChange: (e) => setEmail(e.target.value)
 						})
@@ -819,6 +843,9 @@ window.__ModuleLoader__.load({
 					h(
 						"div",
 						{ style: S.footRow },
+						status && status.email
+							? h("button", { type: "button", onClick: clearAccount, disabled: saving, style: Object.assign({}, S.linkBtn, { marginRight: "auto" }) }, "清除已保存的账号")
+							: null,
 						h("button", { type: "button", onClick: () => { setOpen(false); setResult(""); }, style: S.btnGhost }, "关闭"),
 						h(
 							"button",
@@ -1098,6 +1125,21 @@ window.__ModuleLoader__.load({
 				setEditId(null);
 				setModal(true);
 			};
+			const clearAccount = () => {
+				if (saving) return;
+				setSaving(true);
+				setResult("");
+				api("/tidywork-api/mail/config", { method: "POST", body: JSON.stringify({ clear: true, withSelfCheck: false }), timeoutMs: 30000 })
+					.then((d) => {
+						setEmail("");
+						setCode("");
+						setResult((d && d.text) || "已清除");
+						return refresh();
+					})
+					.catch((e) => setResult(prettyMailError(e && e.message ? e.message : e)))
+					.then(() => setSaving(false));
+			};
+
 			const save = () => {
 				if (!form.title.trim()) {
 					toast("请输入待办内容");
@@ -1517,6 +1559,21 @@ window.__ModuleLoader__.load({
 				});
 				setModal(true);
 			};
+			const clearAccount = () => {
+				if (saving) return;
+				setSaving(true);
+				setResult("");
+				api("/tidywork-api/mail/config", { method: "POST", body: JSON.stringify({ clear: true, withSelfCheck: false }), timeoutMs: 30000 })
+					.then((d) => {
+						setEmail("");
+						setCode("");
+						setResult((d && d.text) || "已清除");
+						return refresh();
+					})
+					.catch((e) => setResult(prettyMailError(e && e.message ? e.message : e)))
+					.then(() => setSaving(false));
+			};
+
 			const save = () => {
 				if (!form.title.trim()) {
 					toast("请输入会议标题");

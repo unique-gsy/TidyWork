@@ -830,7 +830,7 @@ async function routeCore(req, res, url) {
         const email = textField(body.email, 120, "邮箱账号");
         const authCode = typeof body.authCode === "string" ? body.authCode : "";
         const displayName = typeof body.displayName === "string" ? body.displayName : "";
-        const result = await mailModule.saveConfig({ email: email, authCode: authCode, displayName: displayName, withSelfCheck: body.withSelfCheck !== false });
+        const result = await mailModule.saveConfig({ clear: body.clear === true, email: email, authCode: authCode, displayName: displayName, withSelfCheck: body.withSelfCheck !== false });
         if (!result.ok) {
           sendJson(res, 400, { ok: false, error: result.text });
           return;
