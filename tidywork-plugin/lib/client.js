@@ -636,6 +636,180 @@ window.__ModuleLoader__.load({
 			return String(m.duration || "");
 		}
 
+		/**
+		 * 完整响应（含 j.ok / j.recycle 这类旁路字段）。
+		 * api() 只把 data 解出来，删除接口的「回收站 id」就在 data 外面，得走这条。
+		 */
+		function apiRaw(path, opts) {
+			const init = Object.assign({ headers: { "Content-Type": "application/json" } }, opts || {});
+			return fetch(path, init).then((r) =>
+				r.json().then((j) => {
+					if (j && j.ok) return j;
+					const err = new Error((j && j.error) || "请求失败（HTTP " + r.status + "）");
+					err.status = r.status;
+					throw err;
+				})
+			);
+		}
+
+		/** 「撤销」统一走服务端回收站：恢复的是原条目（含 id、版本历史），不是重新造一条。 */
+		function restoreFromRecycle(recycleId, label, after) {
+			if (!recycleId) return Promise.resolve();
+			return api("/tidywork-api/recycle/restore", { method: "POST", body: JSON.stringify({ id: recycleId }) })
+				.then(() => {
+					toast("已恢复" + (label ? "：" + label : ""));
+					if (after) after();
+				})
+				.catch((e) => toast("恢复失败：" + e.message));
+		}
+
+		/** 顶栏「⋯」菜单：导出 / 导入 / 回收站（把三个低频入口收进一个按钮，顶栏不再挤一排）。 */
+		function MoreMenu(props) {
+			const [open, setOpen] = useState(false);
+			const boxRef = useRef(null);
+			const fileRef = useRef(null);
+			useEffect(() => {
+				if (!open) return;
+				const onDoc = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
+				const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+				document.addEventListener("mousedown", onDoc);
+				document.addEventListener("keydown", onKey);
+				return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+			}, [open]);
+
+			/** 导入：读本地 JSON → POST /tidywork-api/import（同 id 跳过，不覆盖现有数据）。 */
+			const onPick = (e) => {
+				const file = e.target.files && e.target.files[0];
+				e.target.value = "";
+				setOpen(false);
+				if (!file) return;
+				const reader = new FileReader();
+				reader.onload = () => {
+					let obj = null;
+					try { obj = JSON.parse(String(reader.result || "")); } catch (error) { toast("这个文件不是合法的 JSON"); return; }
+					const payload = obj && obj.data && typeof obj.data === "object" ? obj.data : obj;
+					api("/tidywork-api/import", { method: "POST", body: JSON.stringify({ todos: payload.todos, meetings: payload.meetings, notes: payload.notes }) })
+						.then((res) => {
+							const i = (res && res.imported) || {};
+							const s = (res && res.skipped) || {};
+							const add = (i.todos || 0) + (i.meetings || 0) + (i.notes || 0);
+							const skip = (s.todos || 0) + (s.meetings || 0) + (s.notes || 0);
+							toast("已导入 " + add + " 条" + (skip ? "（跳过 " + skip + " 条重复或无效）" : ""));
+							if (props.onChanged) props.onChanged();
+						})
+						.catch((err) => toast("导入失败：" + err.message));
+				};
+				reader.readAsText(file);
+			};
+
+			const item = (label, onClick, hint) =>
+				h(
+					"button",
+					{
+						type: "button",
+						role: "menuitem",
+						onClick: () => { setOpen(false); onClick(); },
+						style: { display: "block", width: "100%", textAlign: "left", border: "none", background: "transparent", cursor: "pointer", fontFamily: FONT, fontSize: 13, color: C.text0, padding: "8px 12px", borderRadius: 6 }
+					},
+					label,
+					hint ? h("span", { style: { color: C.text2, fontSize: 11, marginLeft: 6 } }, hint) : null
+				);
+
+			return h(
+				"div",
+				{ ref: boxRef, style: { position: "relative" } },
+				h(
+					"button",
+					{
+						type: "button",
+						title: "更多：导出 / 导入 / 回收站",
+						"aria-haspopup": "menu",
+						"aria-expanded": open ? "true" : "false",
+						onClick: () => setOpen(!open),
+						style: Object.assign({}, S.btnGhost, { padding: "7px 10px" })
+					},
+					"⋯"
+				),
+				open
+					? h(
+						"div",
+						{
+							role: "menu",
+							style: { position: "absolute", right: 0, top: "calc(100% + 6px)", minWidth: 168, background: C.main, border: "1px solid " + C.border, borderRadius: 8, boxShadow: "0 6px 20px rgba(0,0,0,0.12)", padding: 4, zIndex: 20 }
+						},
+						item("导出 JSON 备份", exportAll),
+						item("导入备份…", () => fileRef.current && fileRef.current.click(), "同 id 跳过"),
+						item("回收站", () => props.onOpenRecycle && props.onOpenRecycle(), "7 天内可恢复")
+					)
+					: null,
+				h("input", { ref: fileRef, type: "file", accept: ".json,application/json", style: { display: "none" }, onChange: onPick })
+			);
+		}
+
+		/** 回收站弹窗：列出 7 天内删除的条目，可恢复或彻底删除。 */
+		function RecycleModal(props) {
+			const [items, setItems] = useState(null);
+			const [err, setErr] = useState(null);
+			const [busy, setBusy] = useState("");
+			const load = useCallback(() => {
+				setErr(null);
+				api("/tidywork-api/recycle")
+					.then((d) => setItems(Array.isArray(d) ? d : []))
+					.catch((e) => { setErr(e.message); setItems([]); });
+			}, []);
+			useEffect(() => { if (props.open) load(); }, [props.open, load]);
+
+			const KIND = { todo: "待办", meeting: "会议", note: "笔记" };
+			const daysLeft = (iso) => {
+				const n = Math.ceil((Date.parse(iso || "") - Date.now()) / 86400000);
+				return n > 0 ? "还剩 " + n + " 天" : "即将清除";
+			};
+			const restore = (it) => {
+				setBusy(it.id);
+				api("/tidywork-api/recycle/restore", { method: "POST", body: JSON.stringify({ id: it.id }) })
+					.then(() => { toast("已恢复：" + it.title); load(); if (props.onChanged) props.onChanged(); })
+					.catch((e) => toast("恢复失败：" + e.message))
+					.finally(() => setBusy(""));
+			};
+			const purge = (it) => {
+				if (!window.confirm("彻底删除「" + it.title + "」？删除后无法恢复。")) return;
+				setBusy(it.id);
+				api("/tidywork-api/recycle/" + it.id, { method: "DELETE" })
+					.then(() => { toast("已彻底删除：" + it.title); load(); if (props.onChanged) props.onChanged(); })
+					.catch((e) => toast("删除失败：" + e.message))
+					.finally(() => setBusy(""));
+			};
+
+			return h(
+				Modal,
+				{ open: props.open, title: "回收站（保留 7 天）", onClose: props.onClose },
+				err ? h("div", { style: { fontSize: 12.5, color: C.danger, marginBottom: 10 } }, err) : null,
+				items === null
+					? h("div", { style: { fontSize: 12.5, color: C.text2, padding: "18px 2px" } }, "正在读取…")
+					: !items.length
+						? h("div", { style: { fontSize: 12.5, color: C.text2, padding: "18px 2px" } }, "回收站是空的。删除的待办 / 会议 / 笔记会先放到这里，7 天后自动清除。")
+						: h(
+							"div",
+							{ style: { display: "flex", flexDirection: "column", maxHeight: 360, overflowY: "auto" } },
+							items.map((it) =>
+								h(
+									"div",
+									{ key: it.id, style: { display: "flex", alignItems: "center", gap: 8, padding: "9px 2px", borderBottom: "1px solid " + C.borderLight } },
+									h("span", { style: { fontSize: 10.5, color: C.text2, background: C.hover, borderRadius: 4, padding: "1px 6px", flexShrink: 0 } }, KIND[it.kind] || it.kind),
+									h(
+										"div",
+										{ style: { flex: 1, minWidth: 0 } },
+										h("div", { style: { fontSize: 12.5, color: C.text0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, it.title),
+										h("div", { style: { fontSize: 10.5, color: C.text2 } }, (it.sub ? it.sub + " · " : "") + relTime(String(it.deletedAt || "").slice(0, 16)) + " · " + daysLeft(it.expiresAt))
+									),
+									h("button", { type: "button", disabled: busy === it.id, style: Object.assign({}, S.linkBtn, { color: C.accent, fontWeight: 600, flexShrink: 0 }), onClick: () => restore(it) }, "恢复"),
+									h("button", { type: "button", disabled: busy === it.id, style: Object.assign({}, S.linkBtn, { color: C.danger, flexShrink: 0 }), onClick: () => purge(it) }, "彻底删除")
+								)
+							)
+						)
+			);
+		}
+
 		/** 导出全部数据为 JSON 备份（服务端已有 /export，之前没有任何入口能触发它）。 */
 		function exportAll() {
 			api("/tidywork-api/export")
@@ -1082,18 +1256,12 @@ window.__ModuleLoader__.load({
 					.catch((e) => toast(e.message));
 			};
 			const remove = (it) => {
-				// v3.30：直接删 + toast 撤销（原先是"点两次才算删"，既慢又容易误删）
-				api("/tidywork-api/todos/" + it.id, { method: "DELETE" })
-					.then((removed) => {
+				// v3.34：删除=移入回收站（7 天），「撤销」恢复的是原条目，不再重新造一条新 id
+				apiRaw("/tidywork-api/todos/" + it.id, { method: "DELETE" })
+					.then((j) => {
 						toast("已删除：" + it.title, {
 							action: "撤销",
-							onAction: () => {
-								const src = removed && removed.title ? removed : it;
-								api("/tidywork-api/todos", {
-									method: "POST",
-									body: JSON.stringify({ title: src.title, priority: src.priority, category: src.category, due: src.due, done: !!src.done })
-								}).then(load).catch((e) => toast(e.message));
-							}
+							onAction: () => restoreFromRecycle(j.recycle && j.recycle.id, it.title, load)
 						});
 						load();
 					})
@@ -1476,6 +1644,7 @@ window.__ModuleLoader__.load({
 			const [month, setMonth] = useState(now0.getFullYear() + "-" + String(now0.getMonth() + 1).padStart(2, "0"));
 			const [allMeets, setAllMeets] = useState([]);
 			const [dayView, setDayView] = useState(null);
+			const [showDone, setShowDone] = useState(false);
 			const [modal, setModal] = useState(false);
 			const [editId, setEditId] = useState(null);
 			const [err, setErr] = useState(null);
@@ -1636,17 +1805,13 @@ window.__ModuleLoader__.load({
 					})
 					.catch((e) => toast(e.message));
 			};
-			const remove = (m) => {				// 不用 confirm()：删完用 toast 撤销
-				api("/tidywork-api/meetings/" + m.id, { method: "DELETE" })
-					.then((removed) => {
-						const src = removed && removed.title ? removed : m;
-						toast("已删除：" + src.title, {
+			const remove = (m) => {
+				// v3.34：移入回收站；撤销走 /recycle/restore，恢复原会议（含邮箱来源字段）
+				apiRaw("/tidywork-api/meetings/" + m.id, { method: "DELETE" })
+					.then((j) => {
+						toast("已删除：" + (m.title || "这场会议"), {
 							action: "撤销",
-							onAction: () =>
-								api("/tidywork-api/meetings", {
-									method: "POST",
-									body: JSON.stringify({ title: src.title, date: src.date, startTime: src.startTime || src.time, endTime: src.endTime, location: src.location, participants: src.participants })
-								}).then(() => load()).catch((e) => toast(e.message))
+							onAction: () => restoreFromRecycle(j.recycle && j.recycle.id, m.title, load)
 						});
 						load();
 					})
@@ -1692,7 +1857,43 @@ window.__ModuleLoader__.load({
 
 			// 周条带（日视图）
 			const strip = [];
+			// 下面两个在 dayView 分支里赋值、在页面 render 里读取，必须提到外层（否则日视图一开就 ReferenceError）
+			let dayOpen = [];
+			let doneNode = null;
 			if (dayView != null) {
+				// 当天会议分两组：还没开的照常铺开，已结束的默认折叠成一行（否则下午打开只剩一屏灰卡）
+				const dayList = byDay[dayView] || [];
+				const dayDone = dayList.filter((m) => m.status === "done");
+				dayOpen = dayList.filter((m) => m.status !== "done");
+				// 已结束的会议折叠成一行（默认收起）：下午打开日视图时，别让一屏灰卡把还没开的会挤下去
+				doneNode = dayDone.length
+					? h(
+						"div",
+						{ style: { marginBottom: 12 } },
+						h(
+							"button",
+							{ type: "button", onClick: () => setShowDone(!showDone), style: { display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", border: "1px dashed " + C.border, background: "transparent", borderRadius: 8, cursor: "pointer", fontFamily: FONT, fontSize: 12, color: C.text2 } },
+							"已结束 " + dayDone.length + " 场",
+							h("span", { style: { color: C.accent } }, showDone ? "收起" : "展开")
+						),
+						showDone
+							? h(
+								"div",
+								{ style: { marginTop: 8, display: "flex", flexDirection: "column", gap: 6 } },
+								dayDone.map((m) =>
+									h(
+										"div",
+										{ key: m.id + "-done", style: { display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 8, background: C.hover, fontSize: 12 } },
+										h("span", { style: { flexShrink: 0, color: C.text2 } }, String(m.startTime || m.time || "")),
+										h("span", { style: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: C.text1 } }, m.title),
+										h("button", { type: "button", style: Object.assign({}, S.linkBtn), onClick: () => openEdit(m) }, "编辑"),
+										h("button", { type: "button", style: Object.assign({}, S.linkBtn, { color: C.danger }), onClick: () => remove(m) }, "删除")
+									)
+								)
+							)
+							: null
+					)
+					: null;
 				const base = new Date(y, mon - 1, dayView);
 				const monday = new Date(base);
 				monday.setDate(base.getDate() - ((base.getDay() + 6) % 7));
@@ -1859,7 +2060,7 @@ window.__ModuleLoader__.load({
 												"div",
 												null,
 												h("div", { style: { position: "absolute", left: 70, top: 0, bottom: 0, width: 2, background: C.border } }),
-												(byDay[dayView] || []).map((m) => {
+												dayOpen.map((m) => {
 													let borderColor = C.border;
 													let badgeBg = C.hover;
 													let badgeColor = C.text1;
@@ -1914,7 +2115,8 @@ window.__ModuleLoader__.load({
 															)
 														)
 													);
-												})
+												}),
+												doneNode
 											)
 								)
 							)
@@ -2838,26 +3040,22 @@ window.__ModuleLoader__.load({
 
 			const remove = () => {
 				if (!current) { toast("请先选择笔记"); return; }
-				// v3.30：删完给撤销（确认框挡不住误操作，撤销才是真的兜底）
-				const gone = { title: current.title, content: content || "" };
-				const preview = (gone.content || "").slice(0, 20000);
-				api("/tidywork-api/notes/" + current.id, { method: "DELETE" })
-					.then(() => {
+				// v3.34：移入回收站；恢复走 /recycle/restore，正文与版本历史原样回来
+				const gone = { title: current.title, id: current.id };
+				apiRaw("/tidywork-api/notes/" + current.id, { method: "DELETE" })
+					.then((j) => {
 						clearDraft(current.id);
 						setDirty(false);
 						setCurrent(null);
 						toast("已删除笔记：" + gone.title, {
 							action: "撤销",
 							onAction: () =>
-								api("/tidywork-api/notes", { method: "POST", body: JSON.stringify({ title: gone.title, content: preview }) })
-									.then((n) => {
-										api("/tidywork-api/notes").then((list) => {
-											setNotes(list || []);
-											if (n && n.id) loadNote(n.id);
-										}).catch(() => {});
-										toast("已恢复");
-									})
-									.catch((e) => toast("恢复失败：" + e.message))
+								restoreFromRecycle(j.recycle && j.recycle.id, gone.title, () => {
+									api("/tidywork-api/notes").then((list) => {
+										setNotes(list || []);
+										loadNote(gone.id);
+									}).catch(() => {});
+								})
 						});
 						api("/tidywork-api/notes").then((list) => {
 							setNotes(list || []);
@@ -3357,6 +3555,7 @@ window.__ModuleLoader__.load({
 			const [addDue, setAddDue] = useState("today");
 			const [narrow, setNarrow] = useState(typeof window !== "undefined" ? window.innerWidth < 780 : false);
 			const [err, setErr] = useState(null);
+			const [recycleOpen, setRecycleOpen] = useState(false);
 			const today = ymd(new Date());
 
 			const reload = useCallback(() => {
@@ -3414,6 +3613,35 @@ window.__ModuleLoader__.load({
 			// 接口返回已按「置顶优先、最后编辑倒序」排序，取前 4 条即最近笔记；
 			// 之前写成 slice(-4).reverse() 取的是列表末尾（最旧）4 条，笔记一多就会显示旧笔记。
 			const recentNotes = (notes || []).slice(0, 4);
+
+			// —— 「正在进行 / 下一场」：首屏只关心接下来那一场，不用在整条时间轴上自己找 ——
+			const clockMin = (txt) => {
+				const p = String(txt || "").split(":");
+				const hh = Number(p[0]);
+				const mm = Number(p[1]);
+				return isNaN(hh) || isNaN(mm) ? null : hh * 60 + mm;
+			};
+			const meetBounds = (m) => {
+				const s = clockMin(m.startTime || m.time);
+				if (s == null) return null;
+				let e = clockMin(m.endTime);
+				if (e == null) {
+					const mm = String(m.duration || "").match(/(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/);
+					e = mm ? Number(mm[3]) * 60 + Number(mm[4]) : s + 60;
+				}
+				return { s, e: e > s ? e : s + 60 };
+			};
+			const nowDate = new Date();
+			const nowMins = nowDate.getHours() * 60 + nowDate.getMinutes();
+			const todayNow = ymd(nowDate) === today;
+			const currentMeet = todayNow ? todayMeets.find((m) => { const b = meetBounds(m); return b && nowMins >= b.s && nowMins < b.e; }) : null;
+			const nextMeet = todayNow
+				? todayMeets
+					.filter((m) => { const b = meetBounds(m); return b && b.s > nowMins; })
+					.sort((a, b) => meetBounds(a).s - meetBounds(b).s)[0] || null
+				: null;
+			const nextBounds = nextMeet ? meetBounds(nextMeet) : null;
+			const mmText = (mins) => (mins >= 60 ? Math.floor(mins / 60) + " 小时" + (mins % 60 ? " " + (mins % 60) + " 分钟" : "") : mins + " 分钟");
 
 			// —— 今日日程：视图范围与块几何（默认 09:00–18:00，有越界会议时向外扩展） ——
 			const evBlocks = (() => {
@@ -3694,8 +3922,18 @@ window.__ModuleLoader__.load({
 							},
 							"＋ 新建工作项"
 						),
+						h(
+							"button",
+							{
+								type: "button",
+								title: "全局搜索：待办 / 会议 / 笔记（⌘K）",
+								onClick: () => document.dispatchEvent(new CustomEvent("tidywork:open-palette")),
+								style: Object.assign({}, S.btnGhost, { border: "1px solid " + C.border, borderRadius: 6, padding: "6px 10px" })
+							},
+							"⌘K 搜索"
+						),
 						h(MailBar, { onDone: reload }),
-						h("button", { type: "button", onClick: exportAll, title: "导出全部数据为 JSON 备份", style: S.btnGhost }, "导出")
+						h(MoreMenu, { onOpenRecycle: () => setRecycleOpen(true), onChanged: reload })
 					)
 				),
 
@@ -3730,6 +3968,66 @@ window.__ModuleLoader__.load({
 							"重试"
 						)
 					),
+
+				// 「正在进行 / 下一场」提示条：会议页整屏平铺，首屏反而看不到"接下来是什么"
+				(currentMeet || nextMeet || todayMeets.length)
+					? h(
+						"div",
+						{
+							key: "nextup",
+							onClick: () => open("tidywork-meetings"),
+							style: { margin: "0 20px 10px", padding: "9px 14px", borderRadius: 8, background: currentMeet ? tint(C.accent, 9) : C.main, border: "1px solid " + (currentMeet ? tint(C.accent, 22) : C.border), display: "flex", alignItems: "center", gap: 10, cursor: "pointer", flexShrink: 0, fontSize: 12.5 }
+						},
+						h(HIcon, { d: "cal", size: 14, style: { color: C.accent, flexShrink: 0 } }),
+						currentMeet
+							? h("span", { style: { color: C.text2, flexShrink: 0 } }, "正在进行")
+							: nextMeet
+								? h("span", { style: { color: C.text2, flexShrink: 0 } }, "下一场")
+								: h("span", { style: { color: C.text2, flexShrink: 0 } }, "今天"),
+						h(
+							"span",
+							{ style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: C.text0, fontWeight: 600 } },
+							currentMeet
+								? String(currentMeet.startTime || currentMeet.time || "") + "–" + String(currentMeet.endTime || "") + " " + currentMeet.title
+								: nextMeet
+									? String(nextMeet.startTime || nextMeet.time || "") + " " + nextMeet.title
+									: todayMeets.length + " 场会议都开完了"
+						),
+						h(
+							"span",
+							{ style: { marginLeft: "auto", color: currentMeet ? C.accent : C.text2, flexShrink: 0, fontWeight: currentMeet ? 600 : 400 } },
+							currentMeet && meetBounds(currentMeet)
+								? "还有 " + mmText(Math.max(0, meetBounds(currentMeet).e - nowMins)) + " 结束"
+								: nextMeet && nextBounds
+									? "还有 " + mmText(Math.max(0, nextBounds.s - nowMins)) + (nextMeet.location ? " · " + nextMeet.location : "")
+									: "明天见"
+						)
+					)
+					: null,
+
+				// 空看板引导：第一次打开时讲清"三步就有东西看"，而不是一句"去新建一条"
+				(!err && todos && meetings && notes && !items.length && !(meetings || []).length && !(notes || []).length)
+					? h(
+						"div",
+						{ key: "onboard", style: { margin: "0 20px 12px", padding: "14px 16px", borderRadius: 10, border: "1px dashed " + C.border, background: C.main, flexShrink: 0 } },
+						h("div", { style: { fontSize: 14, fontWeight: 600, marginBottom: 2 } }, "三步把工作台用起来"),
+						h("div", { style: { fontSize: 12, color: C.text2, marginBottom: 10 } }, "TidyWork 最擅长的是把「邮件里的会」和「手上的活」放到同一屏，不用来回切。"),
+						h(
+							"div",
+							{ style: { display: "grid", gridTemplateColumns: narrow ? "1fr" : "repeat(3, 1fr)", gap: 10 } },
+							[["1", "加一条待办", "回车确认，今天到期", () => { const el = document.getElementById("tw-home-add"); if (el) el.focus(); }],
+							["2", "建一场会议", "时间轴会自动排出「可专注」空档", () => open("tidywork-meetings")],
+							["3", "连邮箱或导旧备份", "邮箱自动抽会；旧数据走右上角 ⋯ → 导入备份", () => { const el = document.getElementById("tw-new-btn"); if (el) el.focus(); }]].map(([n, title, desc, run]) =>
+								h(
+									"button",
+									{ key: n, type: "button", onClick: run, style: { textAlign: "left", border: "1px solid " + C.borderLight, background: "transparent", borderRadius: 8, padding: "10px 12px", cursor: "pointer", fontFamily: FONT } },
+									h("div", { style: { fontSize: 12, fontWeight: 600, color: C.text0 } }, n + ". " + title),
+									h("div", { style: { fontSize: 11, color: C.text2, marginTop: 2, lineHeight: 1.45 } }, desc)
+								)
+							)
+						)
+					)
+					: null,
 
 				// 主体两栏
 				h(
@@ -3932,6 +4230,7 @@ window.__ModuleLoader__.load({
 						)
 					)
 				),
+				h(RecycleModal, { open: recycleOpen, onClose: () => setRecycleOpen(false), onChanged: reload })
 
 			);
 		}
@@ -4001,6 +4300,146 @@ window.__ModuleLoader__.load({
 		}
 
 		/** 应用主体：工作台主面板 + 3 组侧边栏入口/主面板（品牌保持宿主原样）。 */
+		/**
+		 * ⌘K 命令面板：一次搜待办 / 会议 / 笔记，顺带几个常用命令。
+		 * 四个面板都挂同一份（见 withPalette），在任何页面按 ⌘K 都能唤起。
+		 */
+		function CommandPalette(props) {
+			const [open, setOpen] = useState(false);
+			const [q, setQ] = useState("");
+			const [all, setAll] = useState(null);
+			const [sel, setSel] = useState(0);
+			const inputRef = useRef(null);
+
+			useEffect(() => {
+				// 捕获阶段 + stopPropagation：DSH 宿主自己也绑了 ⌘K（搜索会话），
+				// 冒泡阶段再处理会先被宿主抢走焦点，面板就永远打不开。
+				const onKey = (e) => {
+					const k = String(e.key || "").toLowerCase();
+					if ((e.metaKey || e.ctrlKey) && k === "k") {
+						e.preventDefault();
+						e.stopPropagation();
+						setOpen((o) => !o);
+						return;
+					}
+					if (k === "escape" && open) { e.preventDefault(); setOpen(false); }
+				};
+				const onOpen = () => setOpen(true);
+				window.addEventListener("keydown", onKey, true);
+				document.addEventListener("tidywork:open-palette", onOpen);
+				return () => {
+					window.removeEventListener("keydown", onKey, true);
+					document.removeEventListener("tidywork:open-palette", onOpen);
+				};
+			}, [open]);
+
+			// 打开时才发请求：面板常驻，不能跟着页面一起拉三份全量数据
+			useEffect(() => {
+				if (!open) return;
+				setQ("");
+				setSel(0);
+				setAll(null);
+				Promise.all([
+					api("/tidywork-api/todos?view=all").catch(() => []),
+					api("/tidywork-api/meetings").catch(() => []),
+					api("/tidywork-api/notes").catch(() => [])
+				]).then(([todos, meetings, notes]) => setAll({ todos: todos || [], meetings: meetings || [], notes: notes || [] }));
+				setTimeout(() => { if (inputRef.current) inputRef.current.focus(); }, 30);
+			}, [open]);
+
+			if (!open) return null;
+
+			const go = (panel) => { setOpen(false); if (props.openPanel) props.openPanel(panel); };
+			const kw = q.trim().toLowerCase();
+			const hit = (s) => !kw || String(s || "").toLowerCase().indexOf(kw) >= 0;
+
+			const commands = [
+				{ label: "工作台", hint: "回到今日概览", run: () => go("tidywork-home") },
+				{ label: "待办", hint: "全部待办与视图", run: () => go("tidywork-todos") },
+				{ label: "会议", hint: "月历 / 当日日程", run: () => go("tidywork-meetings") },
+				{ label: "笔记", hint: "Markdown 笔记与版本", run: () => go("tidywork-notes") },
+				{ label: "导出 JSON 备份", hint: "整库导出到本地", run: () => { setOpen(false); exportAll(); } }
+			].filter((c) => hit(c.label) || hit(c.hint));
+
+			const rows = [];
+			commands.forEach((c) => rows.push({ key: "cmd-" + c.label, tag: "命令", title: c.label, sub: c.hint, run: c.run }));
+			if (all) {
+				(all.todos || []).filter((t) => hit(t.title)).slice(0, 5).forEach((t) => rows.push({ key: "t-" + t.id, tag: "待办", title: t.title, sub: (t.category || "") + (t.done ? " · 已完成" : ""), run: () => go("tidywork-todos") }));
+				(all.meetings || []).filter((m) => hit(m.title)).slice(0, 5).forEach((m) => rows.push({ key: "m-" + m.id, tag: "会议", title: m.title, sub: (m.date || "") + " " + (m.startTime || m.time || ""), run: () => go("tidywork-meetings") }));
+				(all.notes || []).filter((n) => hit(n.title) || hit(n.preview)).slice(0, 5).forEach((n) => rows.push({ key: "n-" + n.id, tag: "笔记", title: n.title || "无标题", sub: n.preview || "", run: () => go("tidywork-notes") }));
+			}
+			const cur = Math.min(sel, Math.max(0, rows.length - 1));
+
+			const onInputKey = (e) => {
+				if (e.key === "ArrowDown") { e.preventDefault(); setSel(Math.min(cur + 1, Math.max(0, rows.length - 1))); }
+				else if (e.key === "ArrowUp") { e.preventDefault(); setSel(Math.max(0, cur - 1)); }
+				else if (e.key === "Enter") { e.preventDefault(); if (rows[cur]) rows[cur].run(); }
+			};
+
+			return h(
+				"div",
+				{ style: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.32)", display: "flex", justifyContent: "center", alignItems: "flex-start", paddingTop: "12vh", zIndex: 10002 }, onMouseDown: (e) => { if (e.target === e.currentTarget) setOpen(false); } },
+				h(
+					"div",
+					{ style: { width: 560, maxWidth: "90vw", background: C.main, border: "1px solid " + C.border, borderRadius: 10, boxShadow: "0 18px 48px rgba(0,0,0,0.22)", overflow: "hidden", fontFamily: FONT } },
+					h("div", { style: { padding: "10px 14px", borderBottom: "1px solid " + C.borderLight } },
+						h("input", {
+							ref: inputRef,
+							id: "tw-cmdk-input",
+							value: q,
+							onChange: (e) => { setQ(e.target.value); setSel(0); },
+							onKeyDown: onInputKey,
+							placeholder: "搜索待办、会议、笔记，或输入命令…（↑↓ 选择，回车打开）",
+							style: { width: "100%", border: "none", outline: "none", background: "transparent", fontFamily: FONT, fontSize: 14, color: C.text0, padding: "4px 0", boxSizing: "border-box" }
+						})
+					),
+					h(
+						"div",
+						{ style: { maxHeight: "46vh", overflowY: "auto", padding: "6px 0" } },
+						rows.length
+							? rows.map((r, i) =>
+								h(
+									"button",
+									{
+										key: r.key,
+										type: "button",
+										onClick: r.run,
+										onMouseEnter: () => setSel(i),
+										style: { display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", border: "none", cursor: "pointer", fontFamily: FONT, padding: "8px 14px", background: i === cur ? C.hover : "transparent" }
+									},
+									h("span", { style: { fontSize: 10.5, color: C.text2, background: C.page, border: "1px solid " + C.borderLight, borderRadius: 4, padding: "1px 6px", flexShrink: 0 } }, r.tag),
+									h(
+										"div",
+										{ style: { minWidth: 0, flex: 1 } },
+										h("div", { style: { fontSize: 13, color: C.text0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, r.title),
+										r.sub ? h("div", { style: { fontSize: 11, color: C.text2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, r.sub) : null
+									)
+								)
+							)
+							: h("div", { style: { padding: "22px 14px", fontSize: 12.5, color: C.text2, textAlign: "center" } }, all ? "没有匹配的待办 / 会议 / 笔记" : "正在读取…")
+					),
+					h("div", { style: { padding: "7px 14px", borderTop: "1px solid " + C.borderLight, fontSize: 11, color: C.text2, display: "flex", gap: 12 } },
+						h("span", null, "⌘K 开关"),
+						h("span", null, "↑↓ 选择"),
+						h("span", null, "↵ 打开"),
+						h("span", null, "Esc 关闭")
+					)
+				)
+			);
+		}
+
+		/** 面板外壳：页面 + ⌘K 面板，四个入口共用同一个快捷键。 */
+		function withPalette(Page) {
+			return function PageWithPalette(props) {
+				return h(
+					"div",
+					{ style: { display: "flex", flex: 1, minWidth: 0, minHeight: 0, height: "100%" } },
+					h(Page, props),
+					h(CommandPalette, props)
+				);
+			};
+		}
+
 		function apply(ctx) {
 			// 让页面里的「＋ 新增」能拿到宿主服务（工作区 / 会话 / 布局）
 			hostCtx = ctx;
@@ -4034,7 +4473,7 @@ window.__ModuleLoader__.load({
 						// v3.16：新建工作项 = 回到今天的 TidyWork 会话（必要的话先建工作区 / 会话）
 						openTodayWork: () => openTodayWorkItem(ctx)
 					}) },
-					HomePage
+					withPalette(HomePage)
 				)
 			);
 

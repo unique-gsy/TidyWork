@@ -179,7 +179,8 @@ async function publishEndpoint(server) {
 const SEEDS = {
   todos: { schema: 2, items: [] },
   meetings: { schema: 2, items: [] },
-  notes: { schema: 2, items: [] }
+  notes: { schema: 2, items: [] },
+  recycle: { schema: 2, items: [] }
 };
 
 /** 单篇笔记正文上限（Markdown 源码）、版本快照保留数、单张图片上限。 */
@@ -327,6 +328,115 @@ async function saveStore(file, data) {
 /** 存单篇笔记（可能几十到几百 KB，不缩进，避免每次自动保存多写一倍字节）。 */
 async function saveNoteFile(file, note) {
   await atomicWrite(file, JSON.stringify(note));
+}
+
+// ---------------------------------------------------------------------------
+// 回收站：删除只做「移入回收站」，7 天内可恢复，到期在读写时自动清掉
+// ---------------------------------------------------------------------------
+
+const RECYCLE_TTL = 7 * 24 * 60 * 60 * 1000;
+const RECYCLE_MAX = 500;
+
+function recyclePath() {
+  return join(dataRoot(), "recycle.json");
+}
+
+/** 读回收站，顺手过滤掉超过 7 天的条目（不落盘，由调用方决定）。 */
+async function loadRecycle() {
+  const store = await readStore(recyclePath(), "recycle");
+  const now = Date.now();
+  const raw = Array.isArray(store.items) ? store.items : [];
+  store.items = raw.filter((x) => {
+    const t = Date.parse(x.deletedAt || "");
+    return Number.isFinite(t) && now - t < RECYCLE_TTL;
+  });
+  return store;
+}
+
+/** 给前端看的精简形状（不带正文与原始数据，避免一次回整个库）。 */
+function recycleView(entry) {
+  const item = entry.item || {};
+  const note = entry.note || {};
+  const title = entry.kind === "note" ? note.title || item.title || "无标题笔记" : item.title || "未命名";
+  const sub = entry.kind === "note" ? note.preview || "" : entry.kind === "meeting" ? item.date || "" : item.category || "";
+  const dt = Date.parse(entry.deletedAt || "");
+  return {
+    id: entry.id,
+    kind: entry.kind,
+    title,
+    sub,
+    deletedAt: entry.deletedAt,
+    expiresAt: Number.isFinite(dt) ? new Date(dt + RECYCLE_TTL).toISOString() : ""
+  };
+}
+
+/** 移入回收站；返回新条目 id（前端拿去做「撤销」）。 */
+async function pushRecycle(entry) {
+  return withQueue("recycle", async () => {
+    const store = await loadRecycle();
+    const item = Object.assign({ id: rid("r"), deletedAt: new Date().toISOString() }, entry);
+    store.items.unshift(item);
+    store.items = store.items.slice(0, RECYCLE_MAX);
+    await saveStore(recyclePath(), store);
+    return item.id;
+  });
+}
+
+/** 恢复一条：同类数据已存在则 409，不覆盖现有数据。 */
+// 注意：本函数只由 /tidywork-api/recycle 路由调用，而 handle() 已经按 "recycle" 键给它排了队；
+// 这里再 withQueue("recycle") 会等自己，直接把请求挂死（初版踩过）。
+async function restoreRecycle(id) {
+    const store = await loadRecycle();
+    const idx = store.items.findIndex((x) => x.id === id);
+    if (idx < 0) throw new HttpError(404, "回收站里没有这一条（可能已过期）");
+    const entry = store.items[idx];
+    const item = entry.item || {};
+    if (entry.kind === "todo") {
+      const file = join(dataRoot(), "todos.json");
+      const todos = await readStore(file, "todos");
+      todos.items = todos.items || [];
+      if (todos.items.some((x) => x.id === item.id)) throw new HttpError(409, "这条待办已经存在");
+      todos.items.push(item);
+      await saveStore(file, todos);
+    } else if (entry.kind === "meeting") {
+      const file = join(dataRoot(), "meetings.json");
+      const meetings = await readStore(file, "meetings");
+      meetings.items = meetings.items || [];
+      if (meetings.items.some((x) => x.id === item.id)) throw new HttpError(409, "这条会议已经存在");
+      meetings.items.push(item);
+      await saveStore(file, meetings);
+    } else if (entry.kind === "note") {
+      const note = entry.note || {};
+      if (!note.id) throw new HttpError(400, "这条笔记的正文没有存下来，无法恢复");
+      const index = await loadNotesIndex();
+      if ((index.items || []).some((x) => x.id === note.id)) throw new HttpError(409, "这篇笔记已经存在");
+      await saveNote(note);
+      index.items = (index.items || []).concat([indexEntry(note)]);
+      await saveStore(notesIndexPath(), index);
+    } else {
+      throw new HttpError(400, "未知的回收站类型");
+    }
+    store.items.splice(idx, 1);
+    await saveStore(recyclePath(), store);
+    return entry;
+}
+
+/** 彻底删除一条（含笔记正文与不再被引用的图片）。 */
+async function purgeRecycle(id) {
+    const store = await loadRecycle();
+    const idx = store.items.findIndex((x) => x.id === id);
+    if (idx < 0) throw new HttpError(404, "回收站里没有这一条");
+    const entry = store.items[idx];
+    if (entry.kind === "note" && entry.note && entry.note.content) {
+      const refs = collectAttachments(entry.note.content);
+      if (refs.size) await gcAttachments(refs);
+      if (entry.note.id) {
+        try { await unlink(notePath(entry.note.id)); } catch (error) {}
+      }
+    }
+    store.items.splice(idx, 1);
+    await saveStore(recyclePath(), store);
+    return entry;
 }
 
 /** 读取数据文件；缺失时写入种子数据（seedsKey 提供）并返回。 */
@@ -797,6 +907,165 @@ async function routeCore(req, res, url) {
     return;
   }
 
+  // ---- 回收站 /tidywork-api/recycle：列表、恢复、彻底删除 ----
+  // 删除接口（待办/会议/笔记）现在都只做「移入回收站」，这里是它的出口。
+  if (segs[0] === "tidywork-api" && segs[1] === "recycle") {
+    try {
+      if (segs.length === 2 && req.method === "GET") {
+        const store = await loadRecycle();
+        sendJson(res, 200, { ok: true, data: store.items.map(recycleView), ttlDays: Math.round(RECYCLE_TTL / 86400000) });
+        return;
+      }
+      if (segs.length === 3 && segs[2] === "restore" && req.method === "POST") {
+        const body = await readJson(req);
+        const id = textField(body.id, 40, "回收站条目 id");
+        if (!id) throw new HttpError(400, "缺少要恢复的条目 id");
+        const entry = await restoreRecycle(id);
+        const view = recycleView(entry);
+        sendJson(res, 200, { ok: true, data: { id: entry.id, kind: entry.kind, title: view.title } });
+        return;
+      }
+      if (segs.length === 3 && req.method === "DELETE") {
+        const entry = await purgeRecycle(segs[2]);
+        sendJson(res, 200, { ok: true, data: { id: entry.id } });
+        return;
+      }
+      sendJson(res, 405, { ok: false, error: "method not allowed" });
+    } catch (error) {
+      serverError(res, error);
+    }
+    return;
+  }
+
+  // ---- 导入 /tidywork-api/import：与 /export 对称的整库合并导入 ----
+  // 口径：同 id 已存在就跳过，不覆盖；单条字段非法只跳过该条，不整批失败。
+  if (segs[0] === "tidywork-api" && segs[1] === "import" && segs.length === 2) {
+    if (req.method !== "POST") {
+      sendJson(res, 405, { ok: false, error: "method not allowed" });
+      return;
+    }
+    try {
+      const body = await readJson(req, 16 * 1024 * 1024);
+      const LIMIT = 1000;
+      const counts = { imported: { todos: 0, meetings: 0, notes: 0 }, skipped: { todos: 0, meetings: 0, notes: 0 } };
+      const check = (key) => {
+        const v = body[key];
+        if (v == null) return [];
+        if (!Array.isArray(v)) throw new HttpError(400, key + " 应为数组");
+        if (v.length > LIMIT) throw new HttpError(413, key + " 一次最多导入 " + LIMIT + " 条");
+        return v;
+      };
+
+      const todoRows = check("todos");
+      if (todoRows.length) {
+        const file = join(dataRoot(), "todos.json");
+        const store = await readStore(file, "todos");
+        store.items = store.items || [];
+        for (const raw of todoRows) {
+          try {
+            const title = textField(raw && raw.title, 60, "标题");
+            if (!title) { counts.skipped.todos++; continue; }
+            const id = textField(raw && raw.id, 40, "id");
+            if (id && store.items.some((x) => x.id === id)) { counts.skipped.todos++; continue; }
+            const stamp = localStamp();
+            store.items.push({
+              id: id || rid("t"),
+              title,
+              done: Boolean(raw.done),
+              priority: priorityField(raw.priority, "mid"),
+              category: textField(raw.category || "工作", 20, "分类") || "工作",
+              due: dueField(raw.due, "none"),
+              createdAt: raw.createdAt || stamp,
+              updatedAt: stamp
+            });
+            counts.imported.todos++;
+          } catch (error) {
+            counts.skipped.todos++;
+          }
+        }
+        await saveStore(file, store);
+      }
+
+      const meetRows = check("meetings");
+      if (meetRows.length) {
+        const file = join(dataRoot(), "meetings.json");
+        const store = await readStore(file, "meetings");
+        store.items = store.items || [];
+        for (const raw of meetRows) {
+          try {
+            const title = textField(raw && raw.title, 60, "标题");
+            if (!title) { counts.skipped.meetings++; continue; }
+            const id = textField(raw && raw.id, 40, "id");
+            if (id && store.items.some((x) => x.id === id)) { counts.skipped.meetings++; continue; }
+            const range = timeRangeField({ startTime: raw.startTime || raw.time, endTime: raw.endTime, duration: raw.duration });
+            const item = normalizeMeeting({
+              id: id || rid("m"),
+              date: dateField(raw.date, "日期"),
+              title,
+              startTime: range.startTime,
+              endTime: range.endTime,
+              time: range.startTime,
+              duration: range.duration,
+              location: textField(raw.location || "线上会议", 40, "地点") || "线上会议",
+              participants: intField(raw.participants, 1, 1, 9999, "参会人数"),
+              createdAt: raw.createdAt || localStamp()
+            });
+            store.items.push(item);
+            counts.imported.meetings++;
+          } catch (error) {
+            counts.skipped.meetings++;
+          }
+        }
+        await saveStore(file, store);
+      }
+
+      const noteRows = check("notes");
+      if (noteRows.length) {
+        const index = await loadNotesIndex();
+        for (const raw of noteRows) {
+          try {
+            const content = String((raw && raw.content) == null ? "" : raw.content);
+            const title = textField(raw && raw.title, 60, "标题") || "未命名笔记";
+            if (content.length > NOTE_MAX) { counts.skipped.notes++; continue; }
+            const id = textField(raw && raw.id, 40, "id");
+            if (id && ((index.items || []).some((x) => x.id === id) || (await readNote(id)))) {
+              counts.skipped.notes++;
+              continue;
+            }
+            const stamp = localStamp();
+            const note = {
+              id: id || rid("n"),
+              title,
+              content,
+              format: raw.format === "text" ? "text" : "markdown",
+              tags: normTags(raw.tags),
+              pinned: Boolean(raw.pinned),
+              preview: mdPreview(content),
+              rev: Number(raw.rev) > 0 ? Number(raw.rev) : 1,
+              createdAt: raw.createdAt || stamp,
+              updatedAt: raw.updatedAt || stamp,
+              versions: []
+            };
+            await saveNote(note);
+            index.items = (index.items || []).concat([indexEntry(note)]);
+            counts.imported.notes++;
+          } catch (error) {
+            counts.skipped.notes++;
+          }
+        }
+        await saveStore(notesIndexPath(), index);
+      }
+
+      if (!counts.imported.todos && !counts.imported.meetings && !counts.imported.notes && !counts.skipped.todos && !counts.skipped.meetings && !counts.skipped.notes) {
+        throw new HttpError(400, "文件里没有 todos / meetings / notes 数据");
+      }
+      sendJson(res, 200, { ok: true, data: counts });
+    } catch (error) {
+      serverError(res, error);
+    }
+    return;
+  }
+
   // ---- 邮箱模块 /tidywork-api/mail/{status,scan,rsvp} ----
   // 扫描走的是 Python 引擎（IMAP + CalDAV），可能跑几十秒，前端要放宽超时；
   // 所有写操作仍然经过 guardRequest 的来源校验，参数一律白名单，不接受任意路径。
@@ -961,7 +1230,9 @@ async function routeCore(req, res, url) {
         if (req.method === "DELETE") {
           store.items = (store.items || []).filter((x) => x.id !== id);
           await saveStore(file, store);
-          sendJson(res, 200, { ok: true, data: it });
+          // 软删除：先进回收站，前端 toast「撤销」与回收站恢复共用这一条
+          const recycleId = await pushRecycle({ kind: "todo", item: it });
+          sendJson(res, 200, { ok: true, data: it, recycle: { id: recycleId } });
           return;
         }
         sendJson(res, 405, { ok: false, error: "method not allowed" });
@@ -1064,7 +1335,8 @@ async function routeCore(req, res, url) {
         if (req.method === "DELETE") {
           store.items = (store.items || []).filter((x) => x.id !== id);
           await saveStore(file, store);
-          sendJson(res, 200, { ok: true, data: meet });
+          const recycleId = await pushRecycle({ kind: "meeting", item: meet });
+          sendJson(res, 200, { ok: true, data: meet, recycle: { id: recycleId } });
           return;
         }
         sendJson(res, 405, { ok: false, error: "method not allowed" });
@@ -1242,13 +1514,13 @@ async function routeCore(req, res, url) {
           return;
         }
         if (req.method === "DELETE") {
-          const refs = collectAttachments(n.content);
+          // 软删除：索引摘掉，但正文文件先留着 —— 回收站恢复要把整篇（含历史版本）原样放回，
+          // 图片也留到「彻底删除」时才清，否则恢复回来的笔记会满地破图。
           const index = await loadNotesIndex();
           index.items = (index.items || []).filter((x) => x.id !== id);
           await saveStore(notesIndexPath(), index);
-          try { await unlink(notePath(id)); } catch (error) {}
-          if (refs.size) await gcAttachments(refs);
-          sendJson(res, 200, { ok: true, data: indexEntry(n) });
+          const recycleId = await pushRecycle({ kind: "note", item: indexEntry(n), note: n });
+          sendJson(res, 200, { ok: true, data: indexEntry(n), recycle: { id: recycleId } });
           return;
         }
         sendJson(res, 405, { ok: false, error: "method not allowed" });

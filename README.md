@@ -146,6 +146,10 @@ tidywork-assistant/
 | `/tidywork-api/mail/scan` | POST | 扫描邮箱并投影（串行执行） |
 | `/tidywork-api/mail/rsvp` | POST | 会议邀请接受 / 拒绝 |
 | `/tidywork-api/mail/config` | POST | 保存账号与授权码（`clear` 可清除） |
+| `/tidywork-api/recycle` | GET | 回收站列表（`ttlDays` 附保留天数） |
+| `/tidywork-api/recycle/restore` | POST | 从回收站恢复原条目（同类已存在返回 409） |
+| `/tidywork-api/recycle/:id` | DELETE | 彻底删除（笔记同时清理正文与图片） |
+| `/tidywork-api/import` | POST | 导入 JSON（同 id 跳过，单条非法只跳过该条） |
 | `/tidywork-api/export` | GET | 整库导出 JSON |
 | `/tidywork-api/health` | GET | 自检：版本、数据目录、各服务状态 |
 

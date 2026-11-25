@@ -201,13 +201,93 @@ test("笔记：版本快照可回滚", async () => {
   assert.equal(restored.json.data.content, "第一版");
 });
 
-test("笔记：删除后索引与正文文件都清掉", async () => {
-  const created = await api("/tidywork-api/notes", { method: "POST", body: { title: "待删", content: "x" } });
+test("笔记：删除后索引摘掉、正文进回收站，可原样恢复", async () => {
+  const created = await api("/tidywork-api/notes", { method: "POST", body: { title: "待删", content: "正文要能回来" } });
   const id = created.json.data.id;
   const del = await api("/tidywork-api/notes/" + id, { method: "DELETE" });
   assert.equal(del.status, 200);
+  assert.ok(del.json.recycle && del.json.recycle.id, "删除应返回回收站条目 id");
+
   const list = await api("/tidywork-api/notes");
   assert.equal(list.json.data.some((n) => n.id === id), false);
+
+  const bin = await api("/tidywork-api/recycle");
+  assert.equal(bin.status, 200);
+  const entry = bin.json.data.find((x) => x.id === del.json.recycle.id);
+  assert.ok(entry, "回收站应列出这条笔记");
+  assert.equal(entry.kind, "note");
+  assert.equal(entry.title, "待删");
+
+  const back = await api("/tidywork-api/recycle/restore", { method: "POST", body: { id: entry.id } });
+  assert.equal(back.status, 200);
+  const detail = await api("/tidywork-api/notes/" + id);
+  assert.equal(detail.status, 200);
+  assert.equal(detail.json.data.content, "正文要能回来");
+});
+
+test("回收站：彻底删除后条目消失，笔记正文文件也清掉", async () => {
+  const created = await api("/tidywork-api/notes", { method: "POST", body: { title: "彻底删", content: "y" } });
+  const id = created.json.data.id;
+  const del = await api("/tidywork-api/notes/" + id, { method: "DELETE" });
+  const rid = del.json.recycle.id;
+  const purge = await api("/tidywork-api/recycle/" + rid, { method: "DELETE" });
+  assert.equal(purge.status, 200);
+  const bin = await api("/tidywork-api/recycle");
+  assert.equal(bin.json.data.some((x) => x.id === rid), false);
+  const files = await readdir(join(dir, "profiles", "test", "tidywork", "notes")).catch(() => []);
+  assert.equal(files.includes(id + ".json"), false, "彻底删除应清掉正文文件");
+});
+
+test("回收站：待办删除后可恢复，恢复已存在的条目返回 409", async () => {
+  const created = await api("/tidywork-api/todos", { method: "POST", body: { title: "待恢复", due: "today" } });
+  const id = created.json.data.id;
+  const del = await api("/tidywork-api/todos/" + id, { method: "DELETE" });
+  assert.equal(del.status, 200);
+  const rid = del.json.recycle.id;
+
+  const back = await api("/tidywork-api/recycle/restore", { method: "POST", body: { id: rid } });
+  assert.equal(back.status, 200);
+  const again = await api("/tidywork-api/recycle/restore", { method: "POST", body: { id: rid } });
+  assert.equal(again.status, 404, "已恢复过的条目不能再恢复一次");
+
+  const list = await api("/tidywork-api/todos?view=all");
+  assert.ok(list.json.data.some((x) => x.id === id));
+});
+
+test("导入：同 id 跳过、新数据追加，笔记正文写入", async () => {
+  const before = await api("/tidywork-api/todos?view=all");
+  const existing = before.json.data[0];
+  const payload = {
+    todos: [
+      { id: existing.id, title: "不该覆盖" },
+      { id: "t_imp1", title: "导入的待办", due: "today" },
+      { title: "" }
+    ],
+    meetings: [{ id: "m_imp1", title: "导入的会议", date: "2026-12-01", startTime: "10:00", endTime: "11:00" }],
+    notes: [{ id: "n_imp1", title: "导入的笔记", content: "## 导入正文", tags: ["导入"] }]
+  };
+  const r = await api("/tidywork-api/import", { method: "POST", body: payload });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.data.imported.todos, 1);
+  assert.equal(r.json.data.skipped.todos, 2);
+  assert.equal(r.json.data.imported.meetings, 1);
+  assert.equal(r.json.data.imported.notes, 1);
+
+  const todos = await api("/tidywork-api/todos?view=all");
+  const kept = todos.json.data.find((x) => x.id === existing.id);
+  assert.equal(kept.title, existing.title, "同 id 不能被导入覆盖");
+  assert.ok(todos.json.data.some((x) => x.id === "t_imp1"));
+
+  const note = await api("/tidywork-api/notes/n_imp1");
+  assert.equal(note.status, 200);
+  assert.equal(note.json.data.content, "## 导入正文");
+});
+
+test("导入：不是数组或超出上限直接 400/413，不清空原数据", async () => {
+  const bad = await api("/tidywork-api/import", { method: "POST", body: { todos: "nope" } });
+  assert.equal(bad.status, 400);
+  const empty = await api("/tidywork-api/import", { method: "POST", body: { hello: 1 } });
+  assert.equal(empty.status, 400);
 });
 
 test("笔记：附件上传后，正文移除图片会回收文件", async () => {
