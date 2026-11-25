@@ -2582,6 +2582,7 @@ window.__ModuleLoader__.load({
 			const [focus, setFocus] = useState(false);
 			const [typer, setTyper] = useState(false);
 			const [dark, setDark] = useState(() => Boolean(document.body && document.body.hasAttribute("data-ds-dark-theme")));
+			const [attempt, setAttempt] = useState(0);
 			const valueRef = useRef(props.value);
 			valueRef.current = props.value;
 
@@ -2644,6 +2645,9 @@ window.__ModuleLoader__.load({
 				let alive = true;
 				setReady(false);
 				setErr("");
+				// 重试时不复用上一次失败留下的 DOM
+				if (vdRef.current) { try { vdRef.current.destroy(); } catch (e) {} vdRef.current = null; }
+				if (hostRef.current) hostRef.current.innerHTML = "";
 				loadVditor()
 					.then((Vditor) => {
 						if (!alive || !hostRef.current) return;
@@ -2679,7 +2683,7 @@ window.__ModuleLoader__.load({
 					vdRef.current = null;
 					if (vd) { try { vd.destroy(); } catch (e) {} }
 				};
-			}, [dark]);
+			}, [dark, attempt]);
 
 			// 外部改值（恢复草稿 / AI 写入 / 切笔记）推回编辑器；用户自己打字不回推，避免光标跳
 			useEffect(() => {
@@ -2750,7 +2754,10 @@ window.__ModuleLoader__.load({
 					chip("专注", focus),
 					chip("打字机", typer),
 					h("div", { style: { flex: 1 } }),
-					h("span", { style: { fontSize: 11, color: err ? C.danger : C.text2 } }, err || (ready ? "实时渲染 · 点哪块编哪块" : "正在加载编辑器…"))
+					err
+						? h("button", { type: "button", onClick: () => setAttempt((a) => a + 1), style: { border: "1px solid " + C.border, background: C.main, color: C.text1, borderRadius: 6, padding: "2px 8px", fontSize: 11.5, cursor: "pointer", fontFamily: FONT } }, "重试加载")
+						: null,
+					h("span", { style: { fontSize: 11, color: err ? C.danger : C.text2 } }, err || (ready ? "实时渲染 · 点哪句编哪句" : "正在加载编辑器…"))
 				),
 				h("div", { ref: hostRef, onClick, onPaste, style: { flex: 1, minHeight: 0, overflow: "hidden" } })
 			);
@@ -2765,19 +2772,8 @@ window.__ModuleLoader__.load({
 			const [tagsText, setTagsText] = useState("");
 			const [pinned, setPinned] = useState(false);
 			const [rev, setRev] = useState(0);
-			const [mode, setModeState] = useState(() => {
-				try {
-					const saved = localStorage.getItem("tw-note-mode");
-					// 老版本存过 live（块级即时），已下线，这类用户直接落到「实时」
-					if (saved === "live") return "typora";
-					return ["typora", "edit", "split", "preview"].indexOf(saved) >= 0 ? saved : "typora";
-				} catch (e) { return "typora"; }
-			});
-			/** 记住上次用的编辑方式：换一篇笔记不用再点一遍。 */
-			const setMode = (next) => {
-				setModeState(next);
-				try { localStorage.setItem("tw-note-mode", next); } catch (e) {}
-			};
+			// 笔记只留一种写法：实时（Vditor ir）。源码 / 分屏 / 预览三个入口已下线。
+			const mode = "typora";
 			const [blocks, setBlocks] = useState([]);
 			const [act, setAct] = useState(null);
 			const [query, setQuery] = useState("");
@@ -3076,7 +3072,6 @@ window.__ModuleLoader__.load({
 				if (meta && (e.key === "b" || e.key === "B")) { e.preventDefault(); liveWrap("**", "**", "加粗文字"); return; }
 				if (meta && (e.key === "i" || e.key === "I")) { e.preventDefault(); liveWrap("*", "*", "斜体文字"); return; }
 				if (meta && (e.key === "s" || e.key === "S")) { e.preventDefault(); saveNow(false); return; }
-				if (meta && (e.key === "e" || e.key === "E")) { e.preventDefault(); setAct(null); setMode("preview"); return; }
 				if (e.key === "Escape") { e.preventDefault(); setAct(null); return; }
 				if (e.key === "Tab") {
 					if (ta && ta.selectionStart != null && liveTab(ta, e.shiftKey)) { e.preventDefault(); return; }
@@ -3328,13 +3323,11 @@ window.__ModuleLoader__.load({
 					.catch((e) => toast(e.message));
 			};
 
-			/** 实时模式：键盘由编辑器自己吃，⌘S / ⌘E 要在这里补回来。 */
+			/** 实时模式：键盘由编辑器自己吃，⌘S 要在这里补回来。 */
 			useEffect(() => {
-				if (mode !== "typora") return undefined;
 				const onKey = (e) => {
 					if (!(e.metaKey || e.ctrlKey)) return;
 					if (e.key === "s" || e.key === "S") { e.preventDefault(); saveNow(false); }
-					else if (e.key === "e" || e.key === "E") { e.preventDefault(); setMode("preview"); }
 				};
 				document.addEventListener("keydown", onKey, true);
 				return () => document.removeEventListener("keydown", onKey, true);
@@ -3409,7 +3402,6 @@ window.__ModuleLoader__.load({
 				if (meta && (e.key === "b" || e.key === "B")) { e.preventDefault(); wrapSelection("**", "**", "加粗文字"); return; }
 				if (meta && (e.key === "i" || e.key === "I")) { e.preventDefault(); wrapSelection("*", "*", "斜体文字"); return; }
 				if (meta && (e.key === "s" || e.key === "S")) { e.preventDefault(); saveNow(false); return; }
-				if (meta && (e.key === "e" || e.key === "E")) { e.preventDefault(); setMode(mode === "preview" ? "edit" : "preview"); return; }
 				if (e.key === "Tab") { e.preventDefault(); insertText("  ", "", ""); }
 			};
 
@@ -3537,55 +3529,8 @@ window.__ModuleLoader__.load({
 					actions
 				);
 
-			const toolbar = h(
-				"div",
-				{ "data-window-drag-exclude": true, style: { display: "flex", flexWrap: "wrap", gap: 2, padding: "6px 0 8px", borderBottom: "1px solid " + C.borderLight } },
-				(mode === "preview" || mode === "typora" ? [] : [
-					{ label: "标题", run: () => applyPrefix("## ") },
-					{ label: "粗体", run: () => wrapSelection("**", "**", "加粗文字") },
-					{ label: "斜体", run: () => wrapSelection("*", "*", "斜体文字") },
-					{ label: "删除线", run: () => wrapSelection("~~", "~~", "文字") },
-					{ label: "引用", run: () => applyPrefix("> ") },
-					{ label: "列表", run: () => applyPrefix("- ") },
-					{ label: "待办", run: () => applyPrefix("- [ ] ") },
-					{ label: "行内代码", run: () => wrapSelection("`", "`", "code") },
-					{ label: "代码块", run: () => insertText("\n```\n", "\n```\n", "") },
-					{ label: "表格", run: () => insertText("\n| 列 1 | 列 2 |\n| --- | --- |\n| 内容 | 内容 |\n", "", "") },
-					{ label: "链接", run: () => insertText("[", "](https://)", "链接文字") },
-					{ label: "内链", run: openLinkPicker },
-					{ label: "图片", run: () => fileRef.current && fileRef.current.click() }
-				]).map((it) => h("button", { key: it.label, className: "tw-tool", onClick: it.run, type: "button" }, it.label)),
-				h("div", { style: { flex: 1 } }),
-				[
-					{ id: "typora", label: "实时" },
-					{ id: "edit", label: "编辑" },
-					{ id: "split", label: "分屏" },
-					{ id: "preview", label: "预览" }
-				].map((it) =>
-					h("button", { key: it.id, className: "tw-tool", onClick: () => setMode(it.id), type: "button", style: mode === it.id ? { background: C.accentSoft, color: C.accent, fontWeight: 600 } : null }, it.label)
-				)
-			);
-
-			const textarea = h("textarea", {
-				ref: taRef,
-				value: content,
-				spellCheck: false,
-				placeholder: "在这里输入笔记内容…支持 Markdown：# 标题、- 列表、- [ ] 待办、| 表格 |、``` 代码块 ```、![图片](url)",
-				onChange: (e) => { setContent(e.target.value); setDirty(true); },
-				onPaste,
-				onDrop,
-				onKeyDown,
-				style: { flex: 1, minWidth: 0, width: "100%", height: "100%", border: "none", outline: "none", resize: "none", background: "transparent", font: "inherit", lineHeight: 1.8, color: C.text1, fontFamily: FONT, boxSizing: "border-box", padding: "10px 0" }
-			});
-
-			const preview = h("div", {
-				ref: previewRef,
-				className: "tw-md",
-				onClick: onPreviewClick,
-				style: { flex: 1, minWidth: 0, overflowY: "auto", padding: "6px 0 24px", boxSizing: "border-box" },
-				dangerouslySetInnerHTML: { __html: mdToHtml(content, format === "text") }
-			});
-
+			// 工具栏整体下线：实时模式里格式靠 Markdown 语法与编辑器自带快捷键，不再摆一排按钮。
+			const toolbar = null;
 			/** 正在编辑的那一块：等高 textarea，和渲染块共用字体与行高，视觉上不跳。 */
 			const liveEditorNode = () => {
 				const val = act ? srcLines().slice(act.start, act.end + 1).join("\n") : "";
@@ -3709,20 +3654,14 @@ window.__ModuleLoader__.load({
 				h(
 					"div",
 					{ style: { flex: 1, minHeight: 0, display: "flex", gap: 16, overflow: "hidden", padding: "0 24px" } },
-					mode === "edit" ? textarea : null,
-					mode === "split" ? h("div", { style: { flex: 1, minWidth: 0, display: "flex", borderRight: "1px solid " + C.borderLight, paddingRight: 12 } }, textarea) : null,
-					mode === "typora"
-						? h(TyporaNote, {
-								key: "vd" + (current ? current.id : "new"),
-								value: content,
-								onChange: (v) => { setContent(v); setDirty(true); },
-								onImage: uploadImageUrl,
-								onLink: openLinked,
-								onFail: (msg) => { toast("实时渲染加载失败，已切到源码编辑：" + msg); setMode("edit"); }
-							})
-						: mode === "edit"
-						? null
-						: preview
+					h(TyporaNote, {
+						key: "vd" + (current ? current.id : "new"),
+						value: content,
+						onChange: (v) => { setContent(v); setDirty(true); },
+						onImage: uploadImageUrl,
+						onLink: openLinked,
+						onFail: (msg) => toast("实时渲染加载失败：" + msg)
+					})
 				),
 				h(
 					"div",
