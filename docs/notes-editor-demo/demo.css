@@ -231,10 +231,10 @@ html, body {
 .vditor-content { overflow-y: auto !important; }
 
 /* 正文排印：贴近 Typora 的开阔行距与克制字号 */
-.vditor-ir { display: block !important; }
+.vditor-ir { display: block !important; width: 100% !important; }
 .vditor-ir > .vditor-reset {
-  width: min(708px, 100%);
-  max-width: 708px;
+  width: auto;
+  max-width: clamp(708px, 72vw, 1040px);
   margin: 0 auto !important;
 }
 .vditor-reset {

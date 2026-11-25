@@ -2543,8 +2543,9 @@ window.__ModuleLoader__.load({
 			// Vditor 给 .vditor-reset 铺了一层 --panel-background-color，会在纸底上切出一块白板；这里去掉
 			"#tw-typora .vditor-reset{background-color:transparent!important}",
 			"#tw-typora .vditor-content{overflow-y:auto!important}",
-			"#tw-typora .vditor-ir{display:block!important}",
-			"#tw-typora .vditor-ir>.vditor-reset{width:min(720px,100%);max-width:720px;margin:0 auto!important}",
+			// 全屏时正文跟着窗口放大：窄屏保底 720，宽屏按 72vw 长，最多 1040；始终居中
+			"#tw-typora .vditor-ir{display:block!important;width:100%!important}",
+			"#tw-typora .vditor-ir>.vditor-reset{width:auto!important;max-width:clamp(720px,72vw,1040px)!important;margin:0 auto!important}",
 			"#tw-typora .vditor-reset{padding:16px 10px 120px!important;font-size:14.5px;line-height:1.9;word-break:break-word}",
 			// Vditor 在标题左侧挂 H1/H2 层级角标，还额外给标题描一条下边框；Typora 两样都没有
 			"#tw-typora .vditor-ir .vditor-reset>h1:before,#tw-typora .vditor-ir .vditor-reset>h2:before,#tw-typora .vditor-ir .vditor-reset>h3:before,#tw-typora .vditor-ir .vditor-reset>h4:before,#tw-typora .vditor-ir .vditor-reset>h5:before,#tw-typora .vditor-ir .vditor-reset>h6:before{content:none!important;display:none!important}",
