@@ -1,7 +1,7 @@
 {
   "name": "@tidywork/dsh-plugin",
   "description": "TidyWork 工作区插件：在 DSH 侧边栏新增「工作区」入口（待办/会议/笔记），UI 与数据通道全部直接复用 DSH 宿主能力。",
-  "version": "3.37.0",
+  "version": "3.37.1",
   "icon": "./icon.svg",
   "type": "module",
   "main": "lib/index.js",

@@ -2540,6 +2540,8 @@ window.__ModuleLoader__.load({
 			"#tw-typora .vditor{border:0!important;background:transparent!important;height:100%}",
 			"#tw-typora .vditor-toolbar,#tw-typora .vditor-counter,#tw-typora .vditor-resize,#tw-typora .vditor-panel,#tw-typora .vditor-tip,#tw-typora .vditor-toolbar--hide{display:none!important}",
 			"#tw-typora .vditor-content,#tw-typora .vditor-ir{background:transparent!important;padding:0!important}",
+			// Vditor 给 .vditor-reset 铺了一层 --panel-background-color，会在纸底上切出一块白板；这里去掉
+			"#tw-typora .vditor-reset{background-color:transparent!important}",
 			"#tw-typora .vditor-content{overflow-y:auto!important}",
 			"#tw-typora .vditor-ir{display:block!important}",
 			"#tw-typora .vditor-ir>.vditor-reset{width:min(720px,100%);max-width:720px;margin:0 auto!important}",

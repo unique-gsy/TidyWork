@@ -367,3 +367,9 @@ html, body {
 .vditor-ir .vditor-reset div[data-type="math-block"] > pre.vditor-ir__preview {
   line-height: 1.9;
 }
+
+/* Vditor 的 .vditor-reset 自带一层 --panel-background-color，去掉才能跟页面同底 */
+.vditor-ir > .vditor-reset,
+.vditor-ir .vditor-reset {
+  background-color: transparent !important;
+}

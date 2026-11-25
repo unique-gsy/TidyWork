@@ -222,6 +222,7 @@ const qs = new URLSearchParams(location.search);
 const first = (qs.get("doc") && DOCS.find((d) => d.id === qs.get("doc"))) || DOCS[0];
 
 openDoc(first).then(() => {
+  if (qs.get("paper") === "1") document.body.style.background = "#f7f8fa";
   if (qs.get("compare") === "1") $("btnCompare").click();
   if (qs.get("focus") === "1") $("btnFocus").click();
   if (qs.get("scroll")) {
