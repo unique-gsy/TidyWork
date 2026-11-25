@@ -2546,21 +2546,45 @@ window.__ModuleLoader__.load({
 			// 全屏时正文跟着窗口放大：窄屏保底 720，宽屏按 72vw 长，最多 1040；始终居中
 			"#tw-typora .vditor-ir{display:block!important;width:100%!important}",
 			"#tw-typora .vditor-ir>.vditor-reset{width:auto!important;max-width:clamp(720px,72vw,1040px)!important;margin:0 auto!important}",
-			"#tw-typora .vditor-reset{padding:16px 10px 120px!important;font-size:14.5px;line-height:1.9;word-break:break-word}",
+				"#tw-typora .vditor-reset{padding:16px 10px 120px!important;font-size:14.5px;line-height:1.9;word-break:break-word;font-family:" + FONT + "}",
 			// Vditor 在标题左侧挂 H1/H2 层级角标，还额外给标题描一条下边框；Typora 两样都没有
 			"#tw-typora .vditor-ir .vditor-reset>h1:before,#tw-typora .vditor-ir .vditor-reset>h2:before,#tw-typora .vditor-ir .vditor-reset>h3:before,#tw-typora .vditor-ir .vditor-reset>h4:before,#tw-typora .vditor-ir .vditor-reset>h5:before,#tw-typora .vditor-ir .vditor-reset>h6:before{content:none!important;display:none!important}",
 			"#tw-typora .vditor-ir .vditor-reset>h1,#tw-typora .vditor-ir .vditor-reset>h2,#tw-typora .vditor-ir .vditor-reset>h3,#tw-typora .vditor-ir .vditor-reset>h4,#tw-typora .vditor-ir .vditor-reset>h5,#tw-typora .vditor-ir .vditor-reset>h6{border:0!important}",
 			// 隐藏的源码也塞在 pre 里，别让它 inheriting 到可见的边框
 			"#tw-typora .vditor-ir .vditor-ir__marker,#tw-typora .vditor-ir .vditor-ir__marker--pre{border:0!important;background:none!important;padding:0!important;margin:0!important}",
-			"#tw-typora .vditor-ir__marker{color:var(--dsw-alias-label-tertiary,#9aa0aa)!important}",
+			"#tw-typora .vditor-ir__marker{color:var(--tw-muted,#8b919c)!important}",
+				"#tw-typora .vditor-ir pre.vditor-reset:empty::before{color:var(--tw-muted,#8b919c)!important}",
 			// 公式块：Typora 是无底色、无边框的裸排版，只在光标进入时露出 $$
 			"#tw-typora .vditor-ir .vditor-reset div[data-type="+"\"math-block\""+"]>pre.vditor-ir__preview{background:transparent!important;border:0!important;padding:10px 0!important;line-height:1.9}",
 			// 公式块里的空文本行会把行距撑开，行高归零后交给 preview 自己撑
 			"#tw-typora .vditor-ir .vditor-reset div[data-type="+"\"math-block\""+"]{line-height:0}",
 			"#tw-typora .vditor-ir .vditor-reset div[data-type="+"\"math-block\""+"] .katex-display{margin:0!important}",
+			// 深色模式：Vditor 的正文颜色来自它自己的"内容主题"（默认 light），跟宿主的深浅色无关，
+			// 于是深色下正文还是 #24292e 近黑、表格行还是 #fafbfc 白底——整篇几乎看不见。
+			// 这里不再依赖它的内容主题，正文一律改读插件的 --tw-* token，两种主题自动跟随。
+			"#tw-typora .vditor-reset{color:var(--tw-ink,#15181e)!important}",
+			"#tw-typora .vditor-reset h1,#tw-typora .vditor-reset h2,#tw-typora .vditor-reset h3,#tw-typora .vditor-reset h4,#tw-typora .vditor-reset h5,#tw-typora .vditor-reset h6,#tw-typora .vditor-reset strong,#tw-typora .vditor-reset b{color:var(--tw-ink,#15181e)!important}",
+			"#tw-typora .vditor-reset a,#tw-typora .vditor-ir__link{color:var(--tw-accent,#3370ff)!important}",
+			"#tw-typora .vditor-reset blockquote:not(.callout){color:var(--tw-ink-2,#565d69)!important}",
+			"#tw-typora .vditor-reset blockquote:not(.callout)::before{background-color:var(--tw-rule-2,#d5d8de)!important}",
+			"#tw-typora .vditor-reset hr{background-color:var(--tw-rule,#e4e6ea)!important}",
+			// 表格：行底、表头底、单元格描边全部换回 token，深色下不再出现白格格
+			"#tw-typora .vditor-reset table tr{background-color:transparent!important;border-top:1px solid var(--tw-rule-2,#d5d8de)!important}",
+			"#tw-typora .vditor-reset table tbody tr:nth-child(2n){background-color:color-mix(in srgb,var(--tw-ink,#15181e) 4%,transparent)!important}",
+			"#tw-typora .vditor-reset table td,#tw-typora .vditor-reset table th{border:1px solid var(--tw-rule-2,#d5d8de)!important}",
+			"#tw-typora .vditor-reset table th{background-color:color-mix(in srgb,var(--tw-ink,#15181e) 5%,transparent)!important}",
+			// 代码：行内底色与块底色都用文字色叠一层，深浅两边都成立；块里再交给 hljs 主题上色
+			"#tw-typora .vditor-reset code:not(.hljs):not(.highlight-chroma){color:var(--tw-ink,#15181e)!important;background-color:color-mix(in srgb,var(--tw-ink,#15181e) 7%,transparent)!important}",
+			"#tw-typora .vditor-reset pre{background-color:color-mix(in srgb,var(--tw-ink,#15181e) 5%,transparent)!important;border:1px solid var(--tw-rule,#e4e6ea)!important;border-radius:8px!important;padding:10px 12px!important}",
+			// 行内代码在 ir 下带 .hljs 类，hljs 主题会给它铺 #282c34；统一压回中性底，块内再透明
+			"#tw-typora .vditor-reset code.hljs{background-color:color-mix(in srgb,var(--tw-ink,#15181e) 8%,transparent)!important;color:var(--tw-ink,#15181e)!important;border-radius:4px;padding:2px 5px}",
+			"#tw-typora .vditor-reset pre>code,#tw-typora .vditor-reset pre>code.hljs{background:none!important;padding:0!important}",
+			"#tw-typora .vditor-reset kbd{color:var(--tw-ink,#15181e)!important;background-color:color-mix(in srgb,var(--tw-ink,#15181e) 8%,transparent)!important;border:1px solid var(--tw-rule,#e4e6ea)!important;box-shadow:none!important}",
 			// 任务列表复选框：跟插件里的 tw-check 同一个观感，不用系统原生小方块
-			"#tw-typora .vditor-ir .vditor-reset input[type="+"\"checkbox\""+"]{appearance:none;-webkit-appearance:none;width:14px;height:14px;margin:0 8px 0 0;border:1px solid var(--dsw-alias-border-l2,#d7dae1);border-radius:4px;background:transparent;vertical-align:-2px;cursor:pointer}",
+			"#tw-typora .vditor-ir .vditor-reset input[type="+"\"checkbox\""+"]{appearance:none;-webkit-appearance:none;width:14px;height:14px;margin:0 8px 0 0;border:1px solid var(--tw-rule-2,#d7dae1);border-radius:4px;background:transparent;vertical-align:-2px;cursor:pointer}",
 			"#tw-typora .vditor-ir .vditor-reset input[type="+"\"checkbox\""+"]:checked{background:var(--tw-accent,#3370ff);border-color:var(--tw-accent,#3370ff)}",
+			// 光标进到代码块时 Vditor 会给 pre 铺 --textarea-background-color（深色下是浅灰块），压掉
+			"#tw-typora .vditor-ir pre.vditor-reset:focus{background-color:color-mix(in srgb,var(--tw-ink,#15181e) 5%,transparent)!important}",
 			// 专注：只亮光标所在的那一块
 			"#tw-typora.tw-vd-focus .vditor-ir>.vditor-reset>*:not(.tw-active){opacity:.3}",
 			"#tw-typora .vditor-ir>.vditor-reset>*{transition:opacity .18s ease}"
@@ -2659,7 +2683,6 @@ window.__ModuleLoader__.load({
 							mode: "ir",
 							value: String(valueRef.current == null ? "" : valueRef.current),
 							height: "100%",
-							theme: dark ? "dark" : "classic",
 							icon: "ant",
 							toolbar: [],
 							counter: { enable: false },
@@ -2668,7 +2691,15 @@ window.__ModuleLoader__.load({
 							outline: { enable: false },
 							tab: "\t",
 							placeholder: "开始写…",
-							preview: { delay: 120, markdown: { sanitize: true, toc: false } },
+							// preview.theme.current 才是 Vditor 的"内容主题"（正文/表格/代码配色），
+							// theme 只管外壳；两者必须同步，否则深色下正文会按浅色那套排。
+							theme: dark ? "dark" : "classic",
+							preview: {
+								delay: 120,
+								theme: { current: dark ? "dark" : "light", path: VD_BASE + "/dist/css/content-theme" },
+								hljs: { style: dark ? "atom-one-dark" : "github", lineNumber: false },
+								markdown: { sanitize: true, toc: false }
+							},
 							input: (v) => { if (!pushRef.current && props.onChange) props.onChange(v); },
 							after: () => { if (alive) setReady(true); }
 						});

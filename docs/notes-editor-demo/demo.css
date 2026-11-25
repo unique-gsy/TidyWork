@@ -12,9 +12,24 @@
   --tw-accent: #2f5bff;
   --tw-accent-soft: rgba(47, 91, 255, 0.07);
   --tw-wash: #eef1f8;
+  --tw-rule-2: #d5d8de;
   --font-ui: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-body: -apple-system, BlinkMacSystemFont, "PingFang SC", "Songti SC", serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* 深色：和插件里的 --tw-* 两套值保持一致，body[data-theme=dark] 由 ?theme=dark 打开 */
+body[data-theme="dark"] {
+  --tw-paper: #121317;
+  --tw-panel: #17181c;
+  --tw-rule: #2a2c33;
+  --tw-rule-2: #3a3d45;
+  --tw-ink: #eceef2;
+  --tw-ink-2: #a7adba;
+  --tw-muted: #767c88;
+  --tw-accent: #8aa6ff;
+  --tw-accent-soft: rgba(138, 166, 255, 0.14);
+  --tw-wash: #1d1f25;
 }
 
 * { box-sizing: border-box; }
@@ -283,12 +298,12 @@ html, body {
 .vditor-reset code:not(.language-*) {
   font-family: var(--font-mono);
   font-size: 12.5px;
-  background: #f2f3f7;
+  background: color-mix(in srgb, var(--tw-ink) 7%, transparent);
   padding: 2px 5px;
   border-radius: 4px;
 }
 .vditor-reset pre {
-  background: #f5f6f9 !important;
+  background: color-mix(in srgb, var(--tw-ink) 5%, transparent) !important;
   border: 1px solid var(--tw-rule);
   border-radius: 9px;
   margin: 1em 0;
@@ -305,22 +320,22 @@ html, body {
   font-family: var(--font-mono);
   font-size: 12.5px;
   line-height: 1.72;
-  color: #2a2f3a;
+  color: var(--tw-ink);
 }
 .vditor-reset table { border-collapse: collapse; font-size: 13.5px; margin: 1em 0; }
 .vditor-reset th, .vditor-reset td { border: 1px solid var(--tw-rule); padding: 6px 10px; text-align: left; vertical-align: top; }
-.vditor-reset th { background: #f5f6f9; font-weight: 600; font-family: var(--font-ui); }
+.vditor-reset th { background: color-mix(in srgb, var(--tw-ink) 5%, transparent); font-weight: 600; font-family: var(--font-ui); }
 .vditor-reset blockquote {
   margin: 1.1em 0;
   padding: 2px 0 2px 14px;
-  border-left: 3px solid #dfe3ea;
+  border-left: 3px solid var(--tw-rule-2) !important;
   color: var(--tw-ink-2);
 }
 .vditor-reset hr { border: 0; border-top: 1px solid var(--tw-rule); margin: 1.8em 0; }
 
 /* 光标所在块露出的源码，弱化到"提示"级别，不抢正文 */
-.vditor-ir__marker { color: #b3b9c4 !important; }
-.vditor-ir__marker--heading { color: #c8cdd6 !important; }
+.vditor-ir__marker { color: var(--tw-muted) !important; }
+.vditor-ir__marker--heading { color: var(--tw-ink-2) !important; }
 
 /* ---------- 专注模式：只亮当前块 ---------- */
 .tw-focus-on .vditor-ir > .vditor-reset > *:not(.tw-active) {
@@ -372,4 +387,38 @@ html, body {
 .vditor-ir > .vditor-reset,
 .vditor-ir .vditor-reset {
   background-color: transparent !important;
+}
+
+/* ---------- 内容主题兜底：Vditor 的 dark.css / light.css 会盖掉上面的 token 规则 ---------- */
+#editor .vditor-reset code:not(.hljs):not(.highlight-chroma) {
+  background: color-mix(in srgb, var(--tw-ink) 7%, transparent) !important;
+  color: var(--tw-ink) !important;
+}
+#editor .vditor-reset table tr {
+  background-color: transparent !important;
+  border-top: 1px solid var(--tw-rule-2) !important;
+}
+#editor .vditor-reset table tbody tr:nth-child(2n) {
+  background-color: color-mix(in srgb, var(--tw-ink) 4%, transparent) !important;
+}
+#editor .vditor-reset table td,
+#editor .vditor-reset table th {
+  border: 1px solid var(--tw-rule-2) !important;
+}
+#editor .vditor-reset table th {
+  background-color: color-mix(in srgb, var(--tw-ink) 5%, transparent) !important;
+}
+#editor .vditor-reset blockquote:not(.callout) { color: var(--tw-ink-2) !important; }
+#editor .vditor-reset blockquote:not(.callout)::before { background-color: var(--tw-rule-2) !important; }
+#editor .vditor-reset hr { background-color: var(--tw-rule-2) !important; }
+#editor .vditor-reset code.hljs {
+  background-color: color-mix(in srgb, var(--tw-ink) 8%, transparent) !important;
+  color: var(--tw-ink) !important;
+  border-radius: 4px;
+  padding: 2px 5px;
+}
+#editor .vditor-reset pre > code,
+#editor .vditor-reset pre > code.hljs {
+  background: none !important;
+  padding: 0 !important;
 }

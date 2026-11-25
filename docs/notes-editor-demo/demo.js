@@ -9,6 +9,8 @@ const DOCS = [
   { id: "editor-choice", title: "笔记编辑器选型：Vditor 试点", file: "./samples/editor-choice.md" },
 ];
 
+const qs = new URLSearchParams(location.search);
+const darkMode = qs.get("theme") === "dark";
 const $ = (id) => document.getElementById(id);
 const shell = document.querySelector(".tw-shell");
 const store = {
@@ -157,7 +159,7 @@ async function applyDoc(md) {
       mode: "ir",
       value: md,
       height: "100%",
-      theme: "classic",
+      theme: darkMode ? "dark" : "classic",
       icon: "ant",
       toolbar: [],
       counter: { enable: false },
@@ -166,7 +168,12 @@ async function applyDoc(md) {
       outline: { enable: false },
       tab: "\t",
       placeholder: "开始写…",
-      preview: { delay: 120, markdown: { sanitize: true, toc: false } },
+      preview: {
+        delay: 120,
+        theme: { current: darkMode ? "dark" : "light", path: "./vendor/vditor/dist/css/content-theme" },
+        hljs: { style: darkMode ? "atom-one-dark" : "github", lineNumber: false },
+        markdown: { sanitize: true, toc: false },
+      },
       input: () => { scheduleSave(); syncLegacy(); renderOutline(vditor ? vditor.getValue() : ""); },
       after: () => { setStatus("编辑器就绪"); markFocus(); },
     });
@@ -217,12 +224,12 @@ DOCS.forEach((doc) => {
   $("docList").appendChild(b);
 });
 
-/* 截图 / 演示用：?compare=1&focus=1&doc=editor-choice */
-const qs = new URLSearchParams(location.search);
+/* 截图 / 演示用：?compare=1&focus=1&doc=editor-choice&theme=dark */
 const first = (qs.get("doc") && DOCS.find((d) => d.id === qs.get("doc"))) || DOCS[0];
 
+if (darkMode) document.body.setAttribute("data-theme", "dark");
 openDoc(first).then(() => {
-  if (qs.get("paper") === "1") document.body.style.background = "#f7f8fa";
+  if (qs.get("paper") === "1" && !darkMode) document.body.style.background = "#f7f8fa";
   if (qs.get("compare") === "1") $("btnCompare").click();
   if (qs.get("focus") === "1") $("btnFocus").click();
   if (qs.get("scroll")) {
