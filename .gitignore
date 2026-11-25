@@ -6,7 +6,16 @@ data/
 __pycache__/
 *.pyc
 
+# 邮箱凭据（只会出现在数据目录，这里再兜一层）
+mail/config.ini
+config.ini
+!*/config.example.ini
+
 # 构建产物与历史备份不入库
 dist/
 backups/
 node_modules/
+*.zip
+
+# 含真实工作数据的本机截图（公开仓库只放脱敏图 docs/shots/）
+docs/shots-local/
