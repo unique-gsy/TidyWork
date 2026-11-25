@@ -1,0 +1,369 @@
+/* TidyWork 笔记 · Vditor ir 试点样式
+   目标：单主题（不引 Vditor 第二套皮肤）、无工具栏、排版贴近 Typora 的克制感，
+   外壳（左列表 / 顶栏 / 大纲）复用 TidyWork 的色板与字号。 */
+
+:root {
+  --tw-paper: #f7f8fa;
+  --tw-panel: #ffffff;
+  --tw-rule: #e4e6ea;
+  --tw-ink: #15181e;
+  --tw-ink-2: #565d69;
+  --tw-muted: #8b919c;
+  --tw-accent: #2f5bff;
+  --tw-accent-soft: rgba(47, 91, 255, 0.07);
+  --tw-wash: #eef1f8;
+  --font-ui: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-body: -apple-system, BlinkMacSystemFont, "PingFang SC", "Songti SC", serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--tw-paper);
+  color: var(--tw-ink);
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+.tw-shell {
+  display: grid;
+  grid-template-columns: 216px minmax(0, 1fr) 184px;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* ---------- 左侧笔记列表 ---------- */
+.tw-side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--tw-panel);
+  border-right: 1px solid var(--tw-rule);
+}
+.tw-side-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 16px 14px 10px;
+}
+.tw-side-title { font-size: 14px; font-weight: 700; }
+.tw-side-sub { font-size: 11px; color: var(--tw-muted); }
+.tw-side-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 8px; }
+.tw-doc {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+}
+.tw-doc:hover { background: var(--tw-wash); }
+.tw-doc--on { background: var(--tw-accent-soft); }
+.tw-doc-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tw-ink);
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tw-doc-preview {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--tw-muted);
+  line-height: 1.45;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tw-side-foot {
+  padding: 9px 14px;
+  border-top: 1px solid var(--tw-rule);
+  font-size: 10.5px;
+  color: var(--tw-muted);
+}
+
+/* ---------- 中间编辑区 ---------- */
+.tw-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.tw-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 48px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--tw-rule);
+  background: var(--tw-panel);
+}
+.tw-bar-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tw-bar-actions { display: flex; align-items: center; gap: 6px; }
+.tw-status { font-size: 11px; color: var(--tw-muted); margin-right: 4px; }
+.tw-btn {
+  padding: 4px 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--tw-ink-2);
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.tw-btn:hover { background: var(--tw-wash); color: var(--tw-ink); }
+.tw-btn[aria-pressed="true"] {
+  background: var(--tw-accent-soft);
+  border-color: rgba(47, 91, 255, 0.18);
+  color: var(--tw-accent);
+  font-weight: 600;
+}
+
+.tw-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+.tw-editor-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: var(--tw-panel);
+}
+.tw-editor-label,
+.tw-legacy-label {
+  padding: 8px 0 0;
+  padding-left: 48px;
+  font-size: 11px;
+  letter-spacing: .04em;
+  color: var(--tw-muted);
+}
+.tw-editor-host { flex: 1; min-height: 0; }
+
+.tw-legacy {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 42%;
+  min-width: 0;
+  background: var(--tw-paper);
+  border-right: 1px solid var(--tw-rule);
+  overflow: hidden;
+}
+.tw-legacy-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 24px 64px 48px;
+}
+
+/* ---------- 右侧大纲 ---------- */
+.tw-outline {
+  background: var(--tw-panel);
+  border-left: 1px solid var(--tw-rule);
+  overflow-y: auto;
+  padding-bottom: 24px;
+}
+.tw-outline-title {
+  padding: 16px 14px 8px;
+  font-size: 12px;
+  color: var(--tw-muted);
+}
+.tw-outline-list { padding: 0 6px; }
+.tw-out {
+  display: block;
+  width: 100%;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--tw-ink-2);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tw-out:hover { background: var(--tw-wash); color: var(--tw-ink); }
+.tw-out--h1 { font-weight: 650; color: var(--tw-ink); }
+.tw-out--h2 { padding-left: 14px; }
+.tw-out--h3 { padding-left: 22px; font-size: 11.5px; color: var(--tw-muted); }
+
+/* ================= Vditor 单主题化 ================= */
+.vditor {
+  border: 0 !important;
+  background: transparent !important;
+  height: 100%;
+  --panel-shadow: none;
+}
+.vditor-toolbar { display: none !important; }
+.vditor-toolbar--hide { display: none !important; }
+.vditor-counter { display: none !important; }
+.vditor-resize { display: none !important; }
+.vditor-panel { display: none !important; }      /* 表情 / 上传面板：这版不用 */
+.vditor-tip { display: none !important; }
+.vditor-content, .vditor-ir {
+  background: transparent !important;
+  padding: 0 !important;
+}
+.vditor-content { overflow-y: auto !important; }
+
+/* 正文排印：贴近 Typora 的开阔行距与克制字号 */
+.vditor-ir { display: block !important; }
+.vditor-ir > .vditor-reset {
+  width: min(708px, 100%);
+  max-width: 708px;
+  margin: 0 auto !important;
+}
+.vditor-reset {
+  padding: 30px 24px 140px !important;
+  font-family: var(--font-ui);
+  font-size: 15.5px;
+  line-height: 1.92;
+  color: var(--tw-ink);
+  letter-spacing: .008em;
+  word-break: break-word;
+}
+
+/* Vditor 会在标题左侧挂 H1/H2 层级角标，并给标题加一条下边框；Typora 两样都没有 */
+.vditor-ir .vditor-reset > h1:before,
+.vditor-ir .vditor-reset > h2:before,
+.vditor-ir .vditor-reset > h3:before,
+.vditor-ir .vditor-reset > h4:before,
+.vditor-ir .vditor-reset > h5:before,
+.vditor-ir .vditor-reset > h6:before {
+  content: none !important;
+  display: none !important;
+}
+.vditor-ir .vditor-reset > h1,
+.vditor-ir .vditor-reset > h2,
+.vditor-ir .vditor-reset > h3,
+.vditor-ir .vditor-reset > h4,
+.vditor-ir .vditor-reset > h5,
+.vditor-ir .vditor-reset > h6 {
+  border: 0 !important;
+}
+.vditor-reset h1, .vditor-reset h2, .vditor-reset h3,
+.vditor-reset h4, .vditor-reset h5, .vditor-reset h6 {
+  font-family: var(--font-ui);
+  font-weight: 650;
+  line-height: 1.4;
+  color: var(--tw-ink);
+  margin: 1.6em 0 .6em;
+}
+.vditor-reset h1 { font-size: 26px; margin-top: .6em; }
+.vditor-reset h2 { font-size: 20px; }
+.vditor-reset h3 { font-size: 17px; }
+.vditor-reset h4, .vditor-reset h5, .vditor-reset h6 { font-size: 15px; }
+.vditor-reset p { margin: .72em 0; }
+.vditor-reset a { color: var(--tw-accent); text-decoration: none; border-bottom: 1px solid rgba(47, 91, 255, .28); }
+.vditor-reset a:hover { border-bottom-color: var(--tw-accent); }
+.vditor-reset code:not(.language-*) {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  background: #f2f3f7;
+  padding: 2px 5px;
+  border-radius: 4px;
+}
+.vditor-reset pre {
+  background: #f5f6f9 !important;
+  border: 1px solid var(--tw-rule);
+  border-radius: 9px;
+  margin: 1em 0;
+}
+/* Vditor 把"隐藏的源码"也塞进一个 pre 里；别让上面的 pre 样式在它身上露边 */
+.vditor-reset .vditor-ir__marker--pre,
+.vditor-reset .vditor-ir__marker {
+  border: 0 !important;
+  background: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+.vditor-reset pre code {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.72;
+  color: #2a2f3a;
+}
+.vditor-reset table { border-collapse: collapse; font-size: 13.5px; margin: 1em 0; }
+.vditor-reset th, .vditor-reset td { border: 1px solid var(--tw-rule); padding: 6px 10px; text-align: left; vertical-align: top; }
+.vditor-reset th { background: #f5f6f9; font-weight: 600; font-family: var(--font-ui); }
+.vditor-reset blockquote {
+  margin: 1.1em 0;
+  padding: 2px 0 2px 14px;
+  border-left: 3px solid #dfe3ea;
+  color: var(--tw-ink-2);
+}
+.vditor-reset hr { border: 0; border-top: 1px solid var(--tw-rule); margin: 1.8em 0; }
+
+/* 光标所在块露出的源码，弱化到"提示"级别，不抢正文 */
+.vditor-ir__marker { color: #b3b9c4 !important; }
+.vditor-ir__marker--heading { color: #c8cdd6 !important; }
+
+/* ---------- 专注模式：只亮当前块 ---------- */
+.tw-focus-on .vditor-ir > .vditor-reset > *:not(.tw-active) {
+  opacity: .3;
+}
+.tw-focus-on .vditor-ir > .vditor-reset > * {
+  transition: opacity .18s ease;
+}
+
+/* 公式块：Typora 是无底色、无边框的裸排版，只在光标进入时露出 $$ */
+.vditor-ir .vditor-reset div[data-type="math-block"] > pre.vditor-ir__preview {
+  background: transparent !important;
+  border: 0 !important;
+  padding: 10px 0 !important;
+}
+
+/* 任务列表复选框：跟插件里的 tw-check 同一个观感，不用系统原生小方块 */
+.vditor-ir .vditor-reset input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin: 0 8px 0 0;
+  border: 1px solid #d7dae1;
+  border-radius: 4px;
+  background: transparent;
+  vertical-align: -2px;
+  cursor: pointer;
+}
+.vditor-ir .vditor-reset input[type="checkbox"]:checked {
+  background: var(--tw-accent, #3370ff);
+  border-color: var(--tw-accent, #3370ff);
+}
+
+/* 公式块：不编辑时把源码行彻底收起来，否则 inline-block 会撑出一行空白 */
+.vditor-ir .vditor-reset div[data-type="math-block"] > pre.vditor-ir__preview .katex-display {
+  margin: 0 !important;
+}
+
+/* Vditor 在公式块里留了空文本行，把行高归零再交给 preview 自己撑 */
+.vditor-ir .vditor-reset div[data-type="math-block"] {
+  line-height: 0;
+}
+.vditor-ir .vditor-reset div[data-type="math-block"] > pre.vditor-ir__preview {
+  line-height: 1.9;
+}

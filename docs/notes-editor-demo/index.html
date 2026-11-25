@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>TidyWork 笔记 · Vditor ir 试点</title>
+<link rel="stylesheet" href="./vendor/vditor/dist/index.css" />
+<link rel="stylesheet" href="./demo.css" />
+</head>
+<body>
+  <div class="tw-shell">
+    <aside class="tw-side">
+      <div class="tw-side-head">
+        <span class="tw-side-title">笔记</span>
+        <span class="tw-side-sub">试点 · 单主题</span>
+      </div>
+      <div class="tw-side-list" id="docList"></div>
+      <div class="tw-side-foot">Vditor ir · 无工具栏 · 本地资源</div>
+    </aside>
+
+    <main class="tw-main">
+      <header class="tw-bar">
+        <div class="tw-bar-title" id="docTitle">季度复盘</div>
+        <div class="tw-bar-actions">
+          <span class="tw-status" id="status">已保存 10:41</span>
+          <button class="tw-btn" id="btnCompare" type="button" aria-pressed="false">对照现状</button>
+          <button class="tw-btn" id="btnFocus" type="button" aria-pressed="false">专注</button>
+          <button class="tw-btn" id="btnType" type="button" aria-pressed="false">打字机</button>
+        </div>
+      </header>
+
+      <div class="tw-pane" id="pane">
+        <section class="tw-legacy" id="legacyPane" hidden>
+          <div class="tw-legacy-label">现状 · 自研渲染（只读）</div>
+          <div class="tw-legacy-body tw-md" id="legacyBody"></div>
+        </section>
+        <section class="tw-editor-wrap" id="editorWrap">
+          <div class="tw-editor-label" id="editorLabel" hidden>试点 · Vditor ir（可编辑）</div>
+          <div class="tw-editor-host" id="editor"></div>
+        </section>
+      </div>
+    </main>
+
+    <aside class="tw-outline" id="outline">
+      <div class="tw-outline-title">大纲</div>
+      <div class="tw-outline-list" id="outlineList"></div>
+    </aside>
+  </div>
+
+  <script src="./vendor/vditor/dist/index.min.js"></script>
+  <script type="module" src="./demo.js"></script>
+</body>
+</html>

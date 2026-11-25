@@ -48,6 +48,14 @@ for f in ${FILES}; do
   cp "${PLUGIN_SRC}/${f}" "${SHARE}/plugin/${f}"
 done
 
+# 笔记 Typora 模式要的编辑器资源（Vditor dist，含 lute/图标/KaTeX），整目录同步
+rm -rf "${SHARE}/plugin/lib/vendor"
+if [ -d "${PLUGIN_SRC}/lib/vendor" ]; then
+  cp -R "${PLUGIN_SRC}/lib/vendor" "${SHARE}/plugin/lib/vendor"
+else
+  fail "插件源码缺少 lib/vendor（笔记 Typora 模式的 Vditor 资源）"
+fi
+
 # 邮箱引擎（Python，标准库即可跑通邮件扫描；CalDAV 才需要第三方库）
 # 只同步 .py 与 run.cmd，__pycache__ / config.ini 一律不带——凭据只存在用户数据目录。
 rm -rf "${SHARE}/plugin/engine"

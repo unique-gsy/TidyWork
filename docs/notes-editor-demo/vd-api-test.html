@@ -1,0 +1,28 @@
+<!doctype html><html><head><meta charset="utf-8"><title>vd api test</title></head>
+<body>
+<pre id="out">running…</pre>
+<div id="host" style="height:300px"></div>
+<script src="./vendor/vditor/dist/index.min.js"></script>
+<script>
+const out = [];
+const log = (k, v) => { out.push(k + "=" + v); document.getElementById("out").textContent = out.join("\n"); };
+let vd = new Vditor("host", {
+  cdn: "./vendor/vditor", mode: "ir", value: "# 一\n\n正文", height: "300px",
+  theme: "classic", icon: "ant", toolbar: [], cache: { enable: false },
+  after: () => {
+    try {
+      log("getValue1", JSON.stringify(vd.getValue()));
+      vd.setValue("# 二\n\n新正文", false);
+      log("getValue2", JSON.stringify(vd.getValue()));
+      vd.focus();
+      vd.insertValue("\n![](/x.png)\n");
+      log("afterInsert", JSON.stringify(vd.getValue()).slice(0, 80));
+    } catch (e) { log("err", e.message); }
+    try { vd.destroy(); log("destroy", "ok"); } catch (e) { log("destroyErr", e.message); }
+    try {
+      vd = new Vditor("host", { cdn: "./vendor/vditor", mode: "ir", value: "# 三", height: "300px", theme: "dark", icon: "ant", toolbar: [], cache: { enable: false }, after: () => log("remount", "ok") });
+    } catch (e) { log("remountErr", e.message); }
+  }
+});
+</script>
+</body></html>

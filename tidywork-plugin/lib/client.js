@@ -2505,6 +2505,257 @@ window.__ModuleLoader__.load({
 			return String(v == null ? "" : v).split(/[,，]/).map((s) => s.trim()).filter(Boolean).slice(0, 8);
 		}
 
+		// ===== 笔记：Typora 模式（Vditor ir）=====
+		// 只在"写起来像 Typora"这件事上引第三方：单栏、点哪块编哪块、光标行进源码、
+		// 没有工具栏、没有第二套皮肤。资源随插件包分发（lib/vendor/vditor），
+		// 由 /tidywork-api/vendor/vditor 提供，不走公网 CDN，离线可用。
+		const VD_BASE = "/tidywork-api/vendor/vditor";
+		let vdLoadPromise = null;
+
+		/** 按需加载 Vditor（只加载一次，失败可重试）。 */
+		function loadVditor() {
+			if (window.Vditor) return Promise.resolve(window.Vditor);
+			if (vdLoadPromise) return vdLoadPromise;
+			vdLoadPromise = new Promise((resolve, reject) => {
+				if (!document.getElementById("tw-vditor-css")) {
+					const link = document.createElement("link");
+					link.id = "tw-vditor-css";
+					link.rel = "stylesheet";
+					link.href = VD_BASE + "/dist/index.css";
+					document.head.appendChild(link);
+				}
+				const script = document.createElement("script");
+				script.src = VD_BASE + "/dist/index.min.js";
+				script.onload = () => (window.Vditor ? resolve(window.Vditor) : reject(new Error("Vditor 未就绪")));
+				script.onerror = () => reject(new Error("Vditor 资源加载失败"));
+				document.head.appendChild(script);
+			}).catch((error) => {
+				vdLoadPromise = null;
+				throw error;
+			});
+			return vdLoadPromise;
+		}
+
+		/** 单主题：把 Vditor 自带的工具栏、面板、第二套皮肤全部收掉，排印改成克制的一套。 */
+		const VD_CSS = [
+			"#tw-typora .vditor{border:0!important;background:transparent!important;height:100%}",
+			"#tw-typora .vditor-toolbar,#tw-typora .vditor-counter,#tw-typora .vditor-resize,#tw-typora .vditor-panel,#tw-typora .vditor-tip,#tw-typora .vditor-toolbar--hide{display:none!important}",
+			"#tw-typora .vditor-content,#tw-typora .vditor-ir{background:transparent!important;padding:0!important}",
+			"#tw-typora .vditor-content{overflow-y:auto!important}",
+			"#tw-typora .vditor-ir{display:block!important}",
+			"#tw-typora .vditor-ir>.vditor-reset{width:min(720px,100%);max-width:720px;margin:0 auto!important}",
+			"#tw-typora .vditor-reset{padding:16px 10px 120px!important;font-size:14.5px;line-height:1.9;word-break:break-word}",
+			// Vditor 在标题左侧挂 H1/H2 层级角标，还额外给标题描一条下边框；Typora 两样都没有
+			"#tw-typora .vditor-ir .vditor-reset>h1:before,#tw-typora .vditor-ir .vditor-reset>h2:before,#tw-typora .vditor-ir .vditor-reset>h3:before,#tw-typora .vditor-ir .vditor-reset>h4:before,#tw-typora .vditor-ir .vditor-reset>h5:before,#tw-typora .vditor-ir .vditor-reset>h6:before{content:none!important;display:none!important}",
+			"#tw-typora .vditor-ir .vditor-reset>h1,#tw-typora .vditor-ir .vditor-reset>h2,#tw-typora .vditor-ir .vditor-reset>h3,#tw-typora .vditor-ir .vditor-reset>h4,#tw-typora .vditor-ir .vditor-reset>h5,#tw-typora .vditor-ir .vditor-reset>h6{border:0!important}",
+			// 隐藏的源码也塞在 pre 里，别让它 inheriting 到可见的边框
+			"#tw-typora .vditor-ir .vditor-ir__marker,#tw-typora .vditor-ir .vditor-ir__marker--pre{border:0!important;background:none!important;padding:0!important;margin:0!important}",
+			"#tw-typora .vditor-ir__marker{color:var(--dsw-alias-label-tertiary,#9aa0aa)!important}",
+			// 公式块：Typora 是无底色、无边框的裸排版，只在光标进入时露出 $$
+			"#tw-typora .vditor-ir .vditor-reset div[data-type="+"\"math-block\""+"]>pre.vditor-ir__preview{background:transparent!important;border:0!important;padding:10px 0!important;line-height:1.9}",
+			// 公式块里的空文本行会把行距撑开，行高归零后交给 preview 自己撑
+			"#tw-typora .vditor-ir .vditor-reset div[data-type="+"\"math-block\""+"]{line-height:0}",
+			"#tw-typora .vditor-ir .vditor-reset div[data-type="+"\"math-block\""+"] .katex-display{margin:0!important}",
+			// 任务列表复选框：跟插件里的 tw-check 同一个观感，不用系统原生小方块
+			"#tw-typora .vditor-ir .vditor-reset input[type="+"\"checkbox\""+"]{appearance:none;-webkit-appearance:none;width:14px;height:14px;margin:0 8px 0 0;border:1px solid var(--dsw-alias-border-l2,#d7dae1);border-radius:4px;background:transparent;vertical-align:-2px;cursor:pointer}",
+			"#tw-typora .vditor-ir .vditor-reset input[type="+"\"checkbox\""+"]:checked{background:var(--tw-accent,#3370ff);border-color:var(--tw-accent,#3370ff)}",
+			// 专注：只亮光标所在的那一块
+			"#tw-typora.tw-vd-focus .vditor-ir>.vditor-reset>*:not(.tw-active){opacity:.3}",
+			"#tw-typora .vditor-ir>.vditor-reset>*{transition:opacity .18s ease}"
+		].join("");
+
+		function ensureVdCss() {
+			if (document.getElementById("tw-vditor-theme")) return;
+			const st = document.createElement("style");
+			st.id = "tw-vditor-theme";
+			st.textContent = VD_CSS;
+			document.head.appendChild(st);
+		}
+
+		/** Typora 模式的编辑区：一个受控的外壳 + 自己管 Vditor 实例。 */
+		function TyporaNote(props) {
+			const hostRef = useRef(null);
+			const vdRef = useRef(null);
+			const pushRef = useRef(false);
+			const [ready, setReady] = useState(false);
+			const [err, setErr] = useState("");
+			const [focus, setFocus] = useState(false);
+			const [typer, setTyper] = useState(false);
+			const [dark, setDark] = useState(() => Boolean(document.body && document.body.hasAttribute("data-ds-dark-theme")));
+			const valueRef = useRef(props.value);
+			valueRef.current = props.value;
+
+			/** 编辑器所在的滚动容器（Vditor 会换实现，找不到就退化成外层）。 */
+			const scroller = () => {
+				const host = hostRef.current;
+				return (host && host.querySelector(".vditor-content")) || host;
+			};
+
+			const typewriter = useCallback(() => {
+				const sel = window.getSelection();
+				if (!sel || !sel.rangeCount) return;
+				const r = sel.getRangeAt(0).getBoundingClientRect();
+				const box = scroller();
+				if (!r || !r.height || !box) return;
+				const host = box.getBoundingClientRect();
+				const target = host.top + Math.min(host.height, 520) * 0.42;
+				const delta = r.top - target;
+				if (Math.abs(delta) > 22) box.scrollTop += delta;
+			}, []);
+
+			/** 专注：光标在哪一块，就把哪一块点亮；没有光标时点亮视口中线附近的那块。 */
+			const markFocus = useCallback(() => {
+				const host = hostRef.current;
+				const root = host && host.querySelector(".vditor-ir > .vditor-reset");
+				if (!root) return;
+				if (!focus) {
+					[...root.children].forEach((el) => el.classList.remove("tw-active"));
+					return;
+				}
+				let active = null;
+				const sel = window.getSelection();
+				if (sel && sel.rangeCount && root.contains(sel.anchorNode)) {
+					let node = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+					while (node && node.parentElement && node.parentElement !== root) node = node.parentElement;
+					active = node && node.parentElement === root ? node : null;
+				}
+				if (!active) {
+					const box = root.getBoundingClientRect();
+					const mid = box.top + Math.min(box.height, 420) * 0.45;
+					let best = null;
+					let bestDist = Infinity;
+					[...root.children].forEach((el) => {
+						const d = Math.abs(el.getBoundingClientRect().top - mid);
+						if (d < bestDist) { bestDist = d; best = el; }
+					});
+					active = best;
+				}
+				[...root.children].forEach((el) => el.classList.toggle("tw-active", el === active));
+			}, [focus]);
+
+			// 宿主切深浅色：重建一次实例，正文内容跟着走
+			useEffect(() => {
+				const mo = new MutationObserver(() => setDark(Boolean(document.body && document.body.hasAttribute("data-ds-dark-theme"))));
+				mo.observe(document.body, { attributes: true, attributeFilter: ["data-ds-dark-theme"] });
+				return () => mo.disconnect();
+			}, []);
+
+			useEffect(() => {
+				let alive = true;
+				setReady(false);
+				setErr("");
+				loadVditor()
+					.then((Vditor) => {
+						if (!alive || !hostRef.current) return;
+						ensureVdCss();
+						vdRef.current = new Vditor(hostRef.current, {
+							cdn: VD_BASE,
+							mode: "ir",
+							value: String(valueRef.current == null ? "" : valueRef.current),
+							height: "100%",
+							theme: dark ? "dark" : "classic",
+							icon: "ant",
+							toolbar: [],
+							counter: { enable: false },
+							cache: { enable: false },
+							resize: { enable: false },
+							outline: { enable: false },
+							tab: "\t",
+							placeholder: "开始写…",
+							preview: { delay: 120, markdown: { sanitize: true, toc: false } },
+							input: (v) => { if (!pushRef.current && props.onChange) props.onChange(v); },
+							after: () => { if (alive) setReady(true); }
+						});
+					})
+					.catch((e) => {
+						if (!alive) return;
+						const msg = (e && e.message) || "编辑器加载失败";
+						setErr(msg);
+						if (props.onFail) props.onFail(msg);
+					});
+				return () => {
+					alive = false;
+					const vd = vdRef.current;
+					vdRef.current = null;
+					if (vd) { try { vd.destroy(); } catch (e) {} }
+				};
+			}, [dark]);
+
+			// 外部改值（恢复草稿 / AI 写入 / 切笔记）推回编辑器；用户自己打字不回推，避免光标跳
+			useEffect(() => {
+				const vd = vdRef.current;
+				if (!vd || !ready) return;
+				const next = String(props.value == null ? "" : props.value);
+				if (String(vd.getValue()) === next) return;
+				pushRef.current = true;
+				vd.setValue(next, false);
+				pushRef.current = false;
+			}, [props.value, ready]);
+
+			useEffect(() => {
+				if (!typer) return undefined;
+				const move = () => typewriter();
+				document.addEventListener("keyup", move, true);
+				document.addEventListener("click", move, true);
+				move();
+				return () => {
+					document.removeEventListener("keyup", move, true);
+					document.removeEventListener("click", move, true);
+				};
+			}, [typer, typewriter]);
+
+			useEffect(() => {
+				markFocus();
+				document.addEventListener("selectionchange", markFocus);
+				return () => document.removeEventListener("selectionchange", markFocus);
+			}, [markFocus, ready]);
+
+			const onClick = (e) => {
+				const a = e.target && e.target.closest && e.target.closest("a");
+				if (!a) return;
+				const href = String(a.getAttribute("href") || "");
+				const m = href.match(/^(todo|meeting):(.+)$/i);
+				if (!m || !props.onLink) return;
+				e.preventDefault();
+				props.onLink(m[1].toLowerCase(), m[2]);
+			};
+
+			const onPaste = (e) => {
+				const items = (e.clipboardData && e.clipboardData.items) || [];
+				let file = null;
+				for (let k = 0; k < items.length; k += 1) {
+					if (items[k].type && items[k].type.indexOf("image/") === 0) { file = items[k].getAsFile(); break; }
+				}
+				if (!file || !props.onImage) return;
+				e.preventDefault();
+				props.onImage(file)
+					.then((url) => { if (url && vdRef.current) vdRef.current.insertValue("\n![" + String(file.name || "图片").replace(/[\[\]]/g, "") + "](" + url + ")\n"); })
+					.catch(() => {});
+			};
+
+			const chip = (label, on) =>
+				h("button", {
+					key: label,
+					type: "button",
+					onClick: () => (label === "专注" ? setFocus(!focus) : setTyper(!typer)),
+					style: { border: on ? "1px solid " + C.accent : "1px solid " + C.border, background: on ? C.accentSoft : C.main, color: on ? C.accent : C.text1, borderRadius: 6, padding: "2px 8px", fontSize: 11.5, cursor: "pointer", fontFamily: FONT }
+				}, label);
+
+			return h(
+				"div",
+				{ id: "tw-typora", className: focus ? "tw-vd-focus" : "", style: { display: "flex", flexDirection: "column", flex: 1, minWidth: 0, minHeight: 0 } },
+				h(
+					"div",
+					{ "data-window-drag-exclude": true, style: { display: "flex", alignItems: "center", gap: 6, padding: "4px 0 6px", borderBottom: "1px solid " + C.borderLight, flexShrink: 0 } },
+					chip("专注", focus),
+					chip("打字机", typer),
+					h("div", { style: { flex: 1 } }),
+					h("span", { style: { fontSize: 11, color: err ? C.danger : C.text2 } }, err || (ready ? "即时渲染 · 点哪块编哪块" : "正在加载编辑器…"))
+				),
+				h("div", { ref: hostRef, onClick, onPaste, style: { flex: 1, minHeight: 0, overflow: "hidden" } })
+			);
+		}
+
 		function NotesPage(props) {
 			const [notes, setNotes] = useState([]);
 			const [current, setCurrent] = useState(null);
@@ -2514,7 +2765,17 @@ window.__ModuleLoader__.load({
 			const [tagsText, setTagsText] = useState("");
 			const [pinned, setPinned] = useState(false);
 			const [rev, setRev] = useState(0);
-			const [mode, setMode] = useState("live");
+			const [mode, setModeState] = useState(() => {
+				try {
+					const saved = localStorage.getItem("tw-note-mode");
+					return ["typora", "live", "edit", "split", "preview"].indexOf(saved) >= 0 ? saved : "live";
+				} catch (e) { return "live"; }
+			});
+			/** 记住上次用的编辑方式：换一篇笔记不用再点一遍。 */
+			const setMode = (next) => {
+				setModeState(next);
+				try { localStorage.setItem("tw-note-mode", next); } catch (e) {}
+			};
 			const [blocks, setBlocks] = useState([]);
 			const [act, setAct] = useState(null);
 			const [query, setQuery] = useState("");
@@ -3066,6 +3327,36 @@ window.__ModuleLoader__.load({
 					.catch((e) => toast(e.message));
 			};
 
+			/** Typora 模式：键盘由编辑器自己吃，⌘S / ⌘E 要在这里补回来。 */
+			useEffect(() => {
+				if (mode !== "typora") return undefined;
+				const onKey = (e) => {
+					if (!(e.metaKey || e.ctrlKey)) return;
+					if (e.key === "s" || e.key === "S") { e.preventDefault(); saveNow(false); }
+					else if (e.key === "e" || e.key === "E") { e.preventDefault(); setMode("preview"); }
+				};
+				document.addEventListener("keydown", onKey, true);
+				return () => document.removeEventListener("keydown", onKey, true);
+			}, [mode]);
+
+			/** Typora 模式用：只负责上传并回地址，插入位置交给编辑器自己判断。 */
+			const uploadImageUrl = (file) =>
+				new Promise((resolve, reject) => {
+					if (!file) { reject(new Error("没有文件")); return; }
+					if (!/^image\//.test(file.type)) { reject(new Error("只支持图片文件")); return; }
+					if (file.size > 6 * 1024 * 1024) { reject(new Error("单张图片不能超过 6MB")); return; }
+					const reader = new FileReader();
+					reader.onerror = () => reject(new Error("读取图片失败"));
+					reader.onload = () => {
+						api("/tidywork-api/attachments", { method: "POST", body: JSON.stringify({ name: file.name || "image", dataUrl: String(reader.result) }) })
+							.then((res) => { if (res && res.url) resolve(res.url); else reject(new Error("上传没有返回地址")); })
+							.catch(reject);
+					};
+					reader.readAsDataURL(file);
+				});
+
+			const openLinked = (kind) => { if (props.openPanel) props.openPanel(kind === "meeting" ? "tidywork-meetings" : "tidywork-todos"); };
+
 			const uploadImage = (file) => {
 				if (!file) return;
 				if (!/^image\//.test(file.type)) { toast("只支持图片文件"); return; }
@@ -3152,6 +3443,13 @@ window.__ModuleLoader__.load({
 			};
 
 			const jumpHeading = (hd) => {
+				if (mode === "typora") {
+					const root = document.querySelector("#tw-typora .vditor-ir > .vditor-reset");
+					const nodes = root ? Array.from(root.querySelectorAll("h1,h2,h3,h4,h5,h6")) : [];
+					const el = nodes[hd.ord - 1];
+					if (el && el.scrollIntoView) el.scrollIntoView({ block: "start", behavior: "smooth" });
+					return;
+				}
 				if (mode === "live") {
 					setAct(null);
 					requestAnimationFrame(() => {
@@ -3241,7 +3539,7 @@ window.__ModuleLoader__.load({
 			const toolbar = h(
 				"div",
 				{ "data-window-drag-exclude": true, style: { display: "flex", flexWrap: "wrap", gap: 2, padding: "6px 0 8px", borderBottom: "1px solid " + C.borderLight } },
-				(mode === "preview" || mode === "live" ? [] : [
+				(mode === "preview" || mode === "live" || mode === "typora" ? [] : [
 					{ label: "标题", run: () => applyPrefix("## ") },
 					{ label: "粗体", run: () => wrapSelection("**", "**", "加粗文字") },
 					{ label: "斜体", run: () => wrapSelection("*", "*", "斜体文字") },
@@ -3258,6 +3556,7 @@ window.__ModuleLoader__.load({
 				]).map((it) => h("button", { key: it.label, className: "tw-tool", onClick: it.run, type: "button" }, it.label)),
 				h("div", { style: { flex: 1 } }),
 				[
+					{ id: "typora", label: "Typora" },
 					{ id: "live", label: "即时" },
 					{ id: "edit", label: "编辑" },
 					{ id: "split", label: "分屏" },
@@ -3412,7 +3711,20 @@ window.__ModuleLoader__.load({
 					{ style: { flex: 1, minHeight: 0, display: "flex", gap: 16, overflow: "hidden", padding: "0 24px" } },
 					mode === "edit" ? textarea : null,
 					mode === "split" ? h("div", { style: { flex: 1, minWidth: 0, display: "flex", borderRight: "1px solid " + C.borderLight, paddingRight: 12 } }, textarea) : null,
-					mode === "live" ? livePane : mode === "edit" ? null : preview
+					mode === "typora"
+						? h(TyporaNote, {
+								key: "vd" + (current ? current.id : "new"),
+								value: content,
+								onChange: (v) => { setContent(v); setDirty(true); },
+								onImage: uploadImageUrl,
+								onLink: openLinked,
+								onFail: (msg) => { toast("Typora 模式加载失败，已切回即时：" + msg); setMode("live"); }
+							})
+						: mode === "live"
+						? livePane
+						: mode === "edit"
+						? null
+						: preview
 				),
 				h(
 					"div",

@@ -19,3 +19,7 @@ node_modules/
 
 # 含真实工作数据的本机截图（公开仓库只放脱敏图 docs/shots/）
 docs/shots-local/
+
+# Vditor 运行时资源必须进库：打包脚本少了它就直接失败，克隆后补不回来
+!tidywork-plugin/lib/vendor/
+!tidywork-plugin/lib/vendor/**

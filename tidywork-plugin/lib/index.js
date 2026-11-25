@@ -98,8 +98,10 @@ function dataRoot() {
   return join(home, "profiles", profile, "tidywork");
 }
 
-/** 短 id：前缀 + 8 位随机 hex。 */
-function rid(prefix) {
+/** 随包分发的编辑器资源：Vditor 的 ir 模式要的 lute、图标、i18n、KaTeX、highlight。 */
+const VENDOR_DIR = fileURLToPath(new URL("./vendor/vditor/", import.meta.url));
+
+/** 短 id：前缀 + 8 位随机 hex。 */function rid(prefix) {
   return prefix + randomBytes(4).toString("hex");
 }
 /** 附件名：32 位 hex，不可枚举。 */
@@ -1345,6 +1347,58 @@ async function routeCore(req, res, url) {
       }
       return;
     }
+  }
+
+  // ---- 编辑器静态资源 /tidywork-api/vendor/vditor/* ----
+  // 笔记的 Typora 模式用 Vditor（ir 即时渲染），它的引擎与字体随插件包分发，
+  // 由这里原样回读：只放行 dist/ 下白名单扩展名，路径里出现 .. 一律拒绝。
+  if (segs[0] === "tidywork-api" && segs[1] === "vendor" && segs[2] === "vditor") {
+    if (req.method !== "GET") {
+      sendJson(res, 405, { ok: false, error: "method not allowed" });
+      return;
+    }
+    const rest = segs.slice(3).join("/");
+    if (!rest || rest.indexOf("..") >= 0 || !/^[A-Za-z0-9._/-]+$/.test(rest)) {
+      sendJson(res, 400, { ok: false, error: "非法资源路径" });
+      return;
+    }
+    const ext = rest.split(".").pop().toLowerCase();
+    const mime = {
+      js: "text/javascript; charset=utf-8",
+      css: "text/css; charset=utf-8",
+      json: "application/json; charset=utf-8",
+      svg: "image/svg+xml",
+      png: "image/png",
+      gif: "image/gif",
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      woff: "font/woff",
+      woff2: "font/woff2",
+      ttf: "font/ttf",
+      otf: "font/otf"
+    }[ext];
+    if (!mime) {
+      sendJson(res, 404, { ok: false, error: "不支持的资源类型" });
+      return;
+    }
+    try {
+      const buf = await readFile(join(VENDOR_DIR, rest));
+      res.writeHead(200, {
+        "Content-Type": mime,
+        "Content-Length": buf.length,
+        // 从安装包里直接读，内容只随版本变，可以长期缓存
+        "Cache-Control": "private, max-age=31536000, immutable",
+        "X-Content-Type-Options": "nosniff"
+      });
+      res.end(buf);
+    } catch (error) {
+      if (error.code === "ENOENT") {
+        sendJson(res, 404, { ok: false, error: "资源不存在" });
+        return;
+      }
+      serverError(res, error);
+    }
+    return;
   }
 
   // ---- 附件（笔记图片）/tidywork-api/attachments[/:file] ----
