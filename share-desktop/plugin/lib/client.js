@@ -2505,7 +2505,7 @@ window.__ModuleLoader__.load({
 			return String(v == null ? "" : v).split(/[,，]/).map((s) => s.trim()).filter(Boolean).slice(0, 8);
 		}
 
-		// ===== 笔记：Typora 模式（Vditor ir）=====
+		// ===== 笔记：实时模式（Vditor ir，手感照 Typora）=====
 		// 只在"写起来像 Typora"这件事上引第三方：单栏、点哪块编哪块、光标行进源码、
 		// 没有工具栏、没有第二套皮肤。资源随插件包分发（lib/vendor/vditor），
 		// 由 /tidywork-api/vendor/vditor 提供，不走公网 CDN，离线可用。
@@ -2572,7 +2572,7 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(st);
 		}
 
-		/** Typora 模式的编辑区：一个受控的外壳 + 自己管 Vditor 实例。 */
+		/** 实时模式的编辑区：一个受控的外壳 + 自己管 Vditor 实例。 */
 		function TyporaNote(props) {
 			const hostRef = useRef(null);
 			const vdRef = useRef(null);
@@ -2750,7 +2750,7 @@ window.__ModuleLoader__.load({
 					chip("专注", focus),
 					chip("打字机", typer),
 					h("div", { style: { flex: 1 } }),
-					h("span", { style: { fontSize: 11, color: err ? C.danger : C.text2 } }, err || (ready ? "即时渲染 · 点哪块编哪块" : "正在加载编辑器…"))
+					h("span", { style: { fontSize: 11, color: err ? C.danger : C.text2 } }, err || (ready ? "实时渲染 · 点哪块编哪块" : "正在加载编辑器…"))
 				),
 				h("div", { ref: hostRef, onClick, onPaste, style: { flex: 1, minHeight: 0, overflow: "hidden" } })
 			);
@@ -2768,8 +2768,10 @@ window.__ModuleLoader__.load({
 			const [mode, setModeState] = useState(() => {
 				try {
 					const saved = localStorage.getItem("tw-note-mode");
-					return ["typora", "live", "edit", "split", "preview"].indexOf(saved) >= 0 ? saved : "live";
-				} catch (e) { return "live"; }
+					// 老版本存过 live（块级即时），已下线，这类用户直接落到「实时」
+					if (saved === "live") return "typora";
+					return ["typora", "edit", "split", "preview"].indexOf(saved) >= 0 ? saved : "typora";
+				} catch (e) { return "typora"; }
 			});
 			/** 记住上次用的编辑方式：换一篇笔记不用再点一遍。 */
 			const setMode = (next) => {
@@ -3213,7 +3215,6 @@ window.__ModuleLoader__.load({
 				setRev(0);
 				setDirty(false);
 				setConflict(null);
-				setMode("live");
 				const d = readDraft("new");
 				if (d && (d.content || "").trim()) setDraft(d);
 				else setDraft(null);
@@ -3327,7 +3328,7 @@ window.__ModuleLoader__.load({
 					.catch((e) => toast(e.message));
 			};
 
-			/** Typora 模式：键盘由编辑器自己吃，⌘S / ⌘E 要在这里补回来。 */
+			/** 实时模式：键盘由编辑器自己吃，⌘S / ⌘E 要在这里补回来。 */
 			useEffect(() => {
 				if (mode !== "typora") return undefined;
 				const onKey = (e) => {
@@ -3339,7 +3340,7 @@ window.__ModuleLoader__.load({
 				return () => document.removeEventListener("keydown", onKey, true);
 			}, [mode]);
 
-			/** Typora 模式用：只负责上传并回地址，插入位置交给编辑器自己判断。 */
+			/** 实时模式用：只负责上传并回地址，插入位置交给编辑器自己判断。 */
 			const uploadImageUrl = (file) =>
 				new Promise((resolve, reject) => {
 					if (!file) { reject(new Error("没有文件")); return; }
@@ -3539,7 +3540,7 @@ window.__ModuleLoader__.load({
 			const toolbar = h(
 				"div",
 				{ "data-window-drag-exclude": true, style: { display: "flex", flexWrap: "wrap", gap: 2, padding: "6px 0 8px", borderBottom: "1px solid " + C.borderLight } },
-				(mode === "preview" || mode === "live" || mode === "typora" ? [] : [
+				(mode === "preview" || mode === "typora" ? [] : [
 					{ label: "标题", run: () => applyPrefix("## ") },
 					{ label: "粗体", run: () => wrapSelection("**", "**", "加粗文字") },
 					{ label: "斜体", run: () => wrapSelection("*", "*", "斜体文字") },
@@ -3556,8 +3557,7 @@ window.__ModuleLoader__.load({
 				]).map((it) => h("button", { key: it.label, className: "tw-tool", onClick: it.run, type: "button" }, it.label)),
 				h("div", { style: { flex: 1 } }),
 				[
-					{ id: "typora", label: "Typora" },
-					{ id: "live", label: "即时" },
+					{ id: "typora", label: "实时" },
 					{ id: "edit", label: "编辑" },
 					{ id: "split", label: "分屏" },
 					{ id: "preview", label: "预览" }
@@ -3718,10 +3718,8 @@ window.__ModuleLoader__.load({
 								onChange: (v) => { setContent(v); setDirty(true); },
 								onImage: uploadImageUrl,
 								onLink: openLinked,
-								onFail: (msg) => { toast("Typora 模式加载失败，已切回即时：" + msg); setMode("live"); }
+								onFail: (msg) => { toast("实时渲染加载失败，已切到源码编辑：" + msg); setMode("edit"); }
 							})
-						: mode === "live"
-						? livePane
 						: mode === "edit"
 						? null
 						: preview
