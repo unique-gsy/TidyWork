@@ -3,7 +3,7 @@
 给 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai) 桌面版加一个工作台插件：侧边栏多出 **工作台 / 待办 / 会议 / 笔记** 四块，工作台一屏看完今天的日程与待办；再把 QQ 邮箱接进来，邮件里的待办与会议邀请会自动落到看板上。
 
 **形态**：DSH 插件组合包（`dsh.bundle.patch` 机制），不 fork、不改 DSH 源码。宿主升级，插件照用。
-**当前版本**：v3.40.0（`share-desktop/VERSION`、`tidywork-plugin/package.json` 同步）
+**当前版本**：v3.42.0（`share-desktop/VERSION`、`tidywork-plugin/package.json` 同步）
 
 ## 界面概览
 
@@ -65,7 +65,7 @@
 ### A. 桌面版（推荐，已有 DSH 桌面版）
 
 ```bash
-bash build-desktop-package.sh          # 生成 dist/TidyWork-DSH桌面插件-v3.40.0.zip
+bash build-desktop-package.sh          # 生成 dist/TidyWork-DSH桌面插件-v3.42.0.zip
 ```
 
 解压后按系统运行 `安装-mac.command` 或 `安装-windows.bat`，装完重开 DSH，侧边栏即出现四块入口。安装包只带 `config.example.ini` 模板，不含任何账号凭据；数据落在 `~/.dsh/profiles/desktop/tidywork`，换包不丢。

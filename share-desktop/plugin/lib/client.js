@@ -666,6 +666,8 @@ window.__ModuleLoader__.load({
 		/** 顶栏「⋯」菜单：导出 / 导入 / 回收站（把三个低频入口收进一个按钮，顶栏不再挤一排）。 */
 		function MoreMenu(props) {
 			const [open, setOpen] = useState(false);
+			const [feishu, setFeishu] = useState(null);
+			const [mail, setMail] = useState(null);
 			const boxRef = useRef(null);
 			const fileRef = useRef(null);
 			useEffect(() => {
@@ -676,6 +678,22 @@ window.__ModuleLoader__.load({
 				document.addEventListener("keydown", onKey);
 				return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
 			}, [open]);
+
+			// 打开菜单时顺手拉一次飞书 / 邮箱状态，用做条目右侧的小提示（只是本地接口，很快）
+			useEffect(() => {
+				if (!open) return;
+				api("/tidywork-api/feishu/status").then((d) => setFeishu(d || null)).catch(() => setFeishu(null));
+				api("/tidywork-api/mail/status").then((d) => setMail(d || null)).catch(() => setMail(null));
+			}, [open]);
+
+			const feishuHint = !feishu
+				? ""
+				: feishu.connected
+					? (feishu.bot && feishu.bot.name) || "已连接"
+					: feishu.configured
+						? "连接未就绪"
+						: "未配置";
+			const mailHint = !mail ? "" : mail.configured ? "已配置" : "未配置";
 
 			/** 导入：读本地 JSON → POST /tidywork-api/import（同 id 跳过，不覆盖现有数据）。 */
 			const onPick = (e) => {
@@ -722,7 +740,7 @@ window.__ModuleLoader__.load({
 					"button",
 					{
 						type: "button",
-						title: "更多：导出 / 导入 / 回收站",
+						title: "更多：飞书 / 邮箱 / 导出 / 导入 / 回收站",
 						"aria-haspopup": "menu",
 						"aria-expanded": open ? "true" : "false",
 						onClick: () => setOpen(!open),
@@ -735,8 +753,14 @@ window.__ModuleLoader__.load({
 						"div",
 						{
 							role: "menu",
-							style: { position: "absolute", right: 0, top: "calc(100% + 6px)", minWidth: 168, background: C.main, border: "1px solid " + C.border, borderRadius: 8, boxShadow: "0 6px 20px rgba(0,0,0,0.12)", padding: 4, zIndex: 20 }
+							style: { position: "absolute", right: 0, top: "calc(100% + 6px)", minWidth: 196, background: C.main, border: "1px solid " + C.border, borderRadius: 8, boxShadow: "0 6px 20px rgba(0,0,0,0.12)", padding: 4, zIndex: 20 }
 						},
+						item("飞书联动", () => document.dispatchEvent(new CustomEvent("tidywork:feishu-open")), feishuHint),
+						item("邮箱设置", () => document.dispatchEvent(new CustomEvent("tidywork:mail-settings")), mailHint),
+						mail && mail.configured
+							? item("扫描邮箱", () => document.dispatchEvent(new CustomEvent("tidywork:mail-scan")), "近 7 天")
+							: null,
+						h("div", { style: { height: 1, background: C.border, margin: "4px 2px" } }),
 						item("导出 JSON 备份", exportAll),
 						item("导入备份…", () => fileRef.current && fileRef.current.click(), "同 id 跳过"),
 						item("回收站", () => props.onOpenRecycle && props.onOpenRecycle(), "7 天内可恢复")
@@ -953,6 +977,18 @@ window.__ModuleLoader__.load({
 					.then(() => setSaving(false));
 			};
 
+			// 顶栏「⋯」菜单里的「邮箱设置 / 扫描邮箱」通过事件调起，弹窗仍挂在本组件里
+			useEffect(() => {
+				const onSettings = () => openSettings();
+				const onScan = () => scan();
+				document.addEventListener("tidywork:mail-settings", onSettings);
+				document.addEventListener("tidywork:mail-scan", onScan);
+				return () => {
+					document.removeEventListener("tidywork:mail-settings", onSettings);
+					document.removeEventListener("tidywork:mail-scan", onScan);
+				};
+			}, [busy, configured]);
+
 			return h(
 				"span",
 				{ style: { display: "inline-flex", alignItems: "center", gap: 8 } },
@@ -963,7 +999,7 @@ window.__ModuleLoader__.load({
 						onClick: scan,
 						disabled: busy,
 						title: configured ? "从邮箱抓取待办与会议；授权码失效时点它会自动打开设置" : "先配置邮箱账号与授权码",
-						style: Object.assign({}, S.btnGhost, { opacity: busy ? 0.6 : 1, cursor: busy ? "default" : "pointer" })
+						style: Object.assign({}, S.btnGhost, { display: props.hideTrigger ? "none" : "inline-block", opacity: busy ? 0.6 : 1, cursor: busy ? "default" : "pointer" })
 					},
 					busy ? "扫描中…" : configured ? "扫描邮箱" : "配置邮箱"
 				),
@@ -1080,6 +1116,12 @@ window.__ModuleLoader__.load({
 				if (!open) return;
 				refresh().then(hydrate);
 			}, [open]);
+			// 顶栏「⋯」菜单里的「飞书联动」通过事件把这里叫起来，弹窗仍挂在本组件里，不受菜单开关影响
+			useEffect(() => {
+				const onOpen = () => setOpen(true);
+				document.addEventListener("tidywork:feishu-open", onOpen);
+				return () => document.removeEventListener("tidywork:feishu-open", onOpen);
+			}, []);
 
 			const connected = !!(status && status.connected);
 			const configured = !!(status && status.configured);
@@ -1156,7 +1198,7 @@ window.__ModuleLoader__.load({
 						type: "button",
 						onClick: () => setOpen(true),
 						title: connected ? "飞书长连接已建立" : configured ? "已配置，连接未就绪" : "配置飞书联动",
-						style: Object.assign({}, S.btnGhost, { display: "inline-flex", alignItems: "center", gap: 6, border: "1px solid " + C.border, borderRadius: 6, padding: "6px 10px" })
+						style: Object.assign({}, S.btnGhost, { display: props.hideTrigger ? "none" : "inline-flex", alignItems: "center", gap: 6, border: "1px solid " + C.border, borderRadius: 6, padding: "6px 10px" })
 					},
 					h("span", { style: { width: 7, height: 7, borderRadius: 99, background: dotColor } }),
 					status && status.bot && status.bot.name ? status.bot.name : "飞书"
@@ -4907,8 +4949,8 @@ window.__ModuleLoader__.load({
 							},
 							"⌘K 搜索"
 						),
-						h(FeishuBar, { onDone: reload }),
-						h(MailBar, { onDone: reload }),
+						h(FeishuBar, { onDone: reload, hideTrigger: true }),
+						h(MailBar, { onDone: reload, hideTrigger: true }),
 						h(MoreMenu, { onOpenRecycle: () => setRecycleOpen(true), onChanged: reload })
 					)
 				),
