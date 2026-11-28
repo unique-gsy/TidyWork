@@ -25,6 +25,7 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { createMailModule } from "./mail.js";
+import { createFeishuBridge } from "./feishu.js";
 
 /** Cordis 插件名（loader 诊断用）。 */
 const name = "tidywork";
@@ -45,7 +46,7 @@ const VERSION = (() => {
  *  - systemPrompt 提供会话系统提示注册（告诉每个会话"这里是 TidyWork 工作区"）。
  * 缺其中任何一个都不再让 apply 整体失败，而是降级并把状态落进 status.json。
  */
-const inject = ["webServer", "tools", "workspaceRegistry", "systemPrompt"];
+const inject = ["webServer", "tools", "workspaceRegistry", "systemPrompt", "sessionController"];
 
 /** 本地时间戳：YYYY-MM-DDTHH:mm:ss+08:00（带时区偏移，跨实例排序才正确）。 */
 function localStamp() {
@@ -148,6 +149,12 @@ let publishedOrigin = "";
 
 /** 邮箱模块实例：apply() 里注入，供 HTTP 路由（/tidywork-api/mail/*）使用。 */
 let mailModule = null;
+
+/** 飞书桥接实例：apply() 里注入，供 HTTP 路由（/tidywork-api/feishu/*）使用。 */
+let feishuModule = null;
+
+/** TidyWork 工作区 id：飞书问答新建会话时挂到这个工作区。 */
+let tidyWorkspaceId = "";
 
 /** 读取本实例 webServer 的原始地址；端口尚未绑定 / 无 URL 形式时返回空串。 */
 function readOrigin(server) {
@@ -866,6 +873,82 @@ function guardRequest(req, res, originHost) {
 /** 路由实现（不含排队）；对外入口见下方 handle。 */
 async function routeCore(req, res, url) {
   const segs = url.pathname.split("/").filter(Boolean);
+
+  // ---- 飞书联动 /tidywork-api/feishu/* ----
+  if (segs[0] === "tidywork-api" && segs[1] === "feishu") {
+    const action = segs[2] || "";
+    try {
+      if (!feishuModule) {
+        sendJson(res, 503, { ok: false, error: "飞书桥接未启动，请查看插件日志" });
+        return;
+      }
+      if (action === "status" && req.method === "GET") {
+        sendJson(res, 200, { ok: true, data: feishuModule.statusSnapshot() });
+        return;
+      }
+      if (action === "config" && req.method === "POST") {
+        const body = await readJson(req);
+        const patch = {};
+        if (body && body.clear) {
+          patch.appId = "";
+          patch.appSecret = "";
+          patch.enabled = false;
+        } else {
+          if (body && body.appId !== undefined) {
+            const appId = textField(body.appId, 64, "App ID") || "";
+            if (appId && !/^cli_[0-9a-fA-F]{16}$/.test(appId)) throw new HttpError(400, "App ID 格式应为 cli_ 开头 + 16 位十六进制");
+            patch.appId = appId;
+          }
+          if (body && body.appSecret !== undefined && String(body.appSecret || "").trim()) {
+            patch.appSecret = textField(body.appSecret, 200, "App Secret");
+          }
+          if (body && body.enabled !== undefined) patch.enabled = Boolean(body.enabled);
+          if (body && body.allowedOpenIds !== undefined) {
+            const list = Array.isArray(body.allowedOpenIds) ? body.allowedOpenIds : [];
+            patch.allowedOpenIds = list.map((x) => String(x || "").trim()).filter(Boolean).slice(0, 50);
+          }
+          if (body && body.group && typeof body.group === "object") patch.group = body.group;
+          if (body && body.remind && typeof body.remind === "object") {
+            const remind = Object.assign({}, body.remind);
+            for (const key of ["dailyAt", "todoAt", "quietStart", "quietEnd"]) {
+              if (remind[key] !== undefined) {
+                const value = String(remind[key] || "").trim();
+                if (value && !/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) throw new HttpError(400, "时间格式应为 HH:MM");
+                remind[key] = value;
+              }
+            }
+            if (remind.meetingLeadMinutes !== undefined) {
+              const lead = Number(remind.meetingLeadMinutes);
+              if (!Number.isFinite(lead) || lead < 0 || lead > 180) throw new HttpError(400, "会前提醒分钟数应在 0–180");
+              remind.meetingLeadMinutes = Math.round(lead);
+            }
+            if (remind.enabled !== undefined) remind.enabled = Boolean(remind.enabled);
+            patch.remind = remind;
+          }
+        }
+        const data = await feishuModule.saveConfig(patch);
+        sendJson(res, 200, { ok: true, data });
+        return;
+      }
+      if (action === "test" && req.method === "POST") {
+        const data = await feishuModule.testSend();
+        sendJson(res, 200, { ok: true, data });
+        return;
+      }
+      if (action === "ask" && req.method === "POST") {
+        const body = await readJson(req);
+        const text = textField(body && body.text, 2000, "问题");
+        if (!text) throw new HttpError(400, "问题不能为空");
+        const data = await feishuModule.localAsk(text);
+        sendJson(res, 200, { ok: true, data });
+        return;
+      }
+      sendJson(res, 404, { ok: false, error: "not found" });
+    } catch (error) {
+      serverError(res, error);
+    }
+    return;
+  }
 
   // ---- 自检 /tidywork-api/health ----
   if (segs[0] === "tidywork-api" && segs[1] === "health" && segs.length === 2) {
@@ -1628,6 +1711,8 @@ async function handle(req, res, url, originHost) {
   });
   if (req.method === "GET") return routeCore(req, res, url);
   const segs = url.pathname.split("/").filter(Boolean);
+  // 飞书本地问答可能跑一两分钟，别把同一资源的配置请求堵在后面
+  if (segs[0] === "tidywork-api" && segs[1] === "feishu" && segs[2] === "ask") return routeCore(req, res, url);
   const key = segs[0] === "tidywork-api" ? (segs[1] || "root") : "root";
   return withQueue(key, () => routeCore(req, res, url));
 }
@@ -1942,6 +2027,7 @@ async function apply(ctx) {
         await mkdir(wsDir, { recursive: true });
         await writeFile(join(wsDir, ".created"), String(Date.now()), "utf8");
         const ws = await ctx.workspaceRegistry.create(wsDir, "TidyWork");
+        tidyWorkspaceId = ws.id || "";
         installDailyNaming(ctx, wsDir, bootedAt);
         console.log(`[tidywork] workspace ready: ${ws.id}`);
       } catch (error) {
@@ -1963,6 +2049,34 @@ async function apply(ctx) {
       localStamp
     });
     mailModule = mail;
+
+    // 飞书桥接：长连接收消息 → 在 TidyWork 工作区建/续会话问答；提醒读同一份待办与会议。
+    // 没有凭据时只是「未配置」，不影响其余功能。sessionController 由 inject 保证存在；
+    // 万一宿主的会话服务在启动后重建，这里只重建自己这份，不互相踩。
+    const bootFeishu = async () => {
+      let bridge = null;
+      try {
+        bridge = createFeishuBridge({
+          ctx,
+          dataRoot: dataRoot(),
+          log: logInfo,
+          getWorkspaceId: () => tidyWorkspaceId,
+          readTodos: async () => ((await readStore(join(dataRoot(), "todos.json"), "todos")).items || []),
+          readMeetings: async () => ((await readStore(join(dataRoot(), "meetings.json"), "meetings")).items || [])
+        });
+        feishuModule = bridge;
+        await bridge.init();
+      } catch (error) {
+        logError("飞书桥接启动失败：" + String(error && error.message ? error.message : error));
+        if (feishuModule === bridge) feishuModule = null;
+      }
+    };
+    bootFeishu();
+    ctx.effect(() => () => {
+      const bridge = feishuModule;
+      feishuModule = null;
+      try { if (bridge) { bridge.stop(); bridge.stopReminders(); } } catch (error) {}
+    }, "tidywork: feishu bridge");
 
     // Agent 工具：会话中通过自然语言新增待办/会议/笔记，以及邮箱扫描/回复邀请。
     if (services.tools) {

@@ -37,7 +37,7 @@ done
 # ---------- 2. 同步最新插件源码 ----------
 # v3.30 起 ui/ 静态页已删除（真前端早就在 lib/client.js 里，ui/ 是没人引用的旧原型，
 # 而 package.json#files 又没带上，装完必然 404）。这里同步的文件必须和 package.json#files 保持一致。
-FILES="package.json cordis.patch.yml icon.svg locale/zh.json lib/client.js lib/index.js lib/mail.js lib/types/index.d.ts lib/types/client/index.d.ts config.example.ini"
+FILES="package.json cordis.patch.yml icon.svg locale/zh.json lib/client.js lib/index.js lib/mail.js lib/feishu.js lib/types/index.d.ts lib/types/client/index.d.ts config.example.ini"
 for f in ${FILES}; do
   [ -f "${PLUGIN_SRC}/${f}" ] || fail "插件源码缺少 ${f}"
 done

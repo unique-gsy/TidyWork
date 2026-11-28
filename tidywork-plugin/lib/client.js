@@ -1031,6 +1031,270 @@ window.__ModuleLoader__.load({
 			);
 		}
 
+		/**
+		 * 飞书联动（工作台顶栏）：一个入口 + 一个弹窗。
+		 * - 未配置：按钮显示「飞书」，弹窗里填 App ID / Secret；
+		 * - 已连接：小圆点变绿，弹窗可改提醒时间、发测试消息；
+		 * - 「本地测试问答」不经过飞书，直接走同一套会话链路，用于没有凭据时验证。
+		 */
+		function FeishuBar(props) {
+			const [status, setStatus] = useState(null);
+			const [open, setOpen] = useState(false);
+			const [appId, setAppId] = useState("");
+			const [secret, setSecret] = useState("");
+			const [enabled, setEnabled] = useState(true);
+			const [requireMention, setRequireMention] = useState(true);
+			const [remindOn, setRemindOn] = useState(false);
+			const [dailyAt, setDailyAt] = useState("08:30");
+			const [todoAt, setTodoAt] = useState("09:00");
+			const [lead, setLead] = useState(15);
+			const [quietStart, setQuietStart] = useState("22:00");
+			const [quietEnd, setQuietEnd] = useState("08:00");
+			const [saving, setSaving] = useState(false);
+			const [result, setResult] = useState("");
+			const [askText, setAskText] = useState("今天有哪些会议和待办？");
+			const [asking, setAsking] = useState(false);
+			const [askResult, setAskResult] = useState("");
+
+			const refresh = () =>
+				api("/tidywork-api/feishu/status")
+					.then((d) => setStatus(d || null))
+					.catch(() => setStatus(null));
+
+			const hydrate = (d) => {
+				if (!d) return;
+				const r = d.remind || {};
+				setAppId(d.appId || "");
+				setEnabled(d.enabled !== false);
+				setRequireMention(Boolean(d.group && d.group.requireMention));
+				setRemindOn(Boolean(r.enabled));
+				setDailyAt(r.dailyAt || "08:30");
+				setTodoAt(r.todoAt || "09:00");
+				setLead(Number(r.meetingLeadMinutes) || 15);
+				setQuietStart(r.quietStart || "22:00");
+				setQuietEnd(r.quietEnd || "08:00");
+			};
+
+			useEffect(() => { refresh().then(hydrate); }, []);
+			useEffect(() => {
+				if (!open) return;
+				refresh().then(hydrate);
+			}, [open]);
+
+			const connected = !!(status && status.connected);
+			const configured = !!(status && status.configured);
+			const dotColor = connected ? C.success : configured ? C.warning : C.text2;
+
+			const save = () => {
+				if (saving) return;
+				setSaving(true);
+				setResult("");
+				const body = {
+					appId: appId.trim(),
+					enabled,
+					group: { enabled: true, requireMention },
+					remind: {
+						enabled: remindOn,
+						dailyAt,
+						todoAt,
+						meetingLeadMinutes: Number(lead) || 0,
+						quietStart,
+						quietEnd
+					}
+				};
+				if (secret.trim()) body.appSecret = secret.trim();
+				api("/tidywork-api/feishu/config", { method: "POST", body: JSON.stringify(body), timeoutMs: 30000 })
+					.then((d) => {
+						setSecret("");
+						hydrate(d);
+						setStatus(d);
+						const err = d && d.lastError;
+						setResult(err ? "已保存，但连接失败：" + err : d && d.connected ? "已保存，长连接已建立" : "已保存，正在连接…");
+						toast("飞书配置已保存");
+					})
+					.catch((e) => setResult(e && e.message ? e.message : String(e)))
+					.then(() => { setSaving(false); refresh(); });
+			};
+
+			const clear = () => {
+				if (saving) return;
+				setSaving(true);
+				api("/tidywork-api/feishu/config", { method: "POST", body: JSON.stringify({ clear: true }), timeoutMs: 30000 })
+					.then((d) => { setAppId(""); setSecret(""); hydrate(d); setStatus(d); setResult("已清除飞书凭据"); })
+					.catch((e) => setResult(e && e.message ? e.message : String(e)))
+					.then(() => setSaving(false));
+			};
+
+			const test = () => {
+				if (saving) return;
+				setSaving(true);
+				api("/tidywork-api/feishu/test", { method: "POST", body: "{}", timeoutMs: 30000 })
+					.then(() => setResult("测试消息已发出，去飞书看看"))
+					.catch((e) => setResult(e && e.message ? e.message : String(e)))
+					.then(() => setSaving(false));
+			};
+
+			const localAsk = () => {
+				if (asking) return;
+				setAsking(true);
+				setAskResult("正在 TidyWork 会话里跑，最长两分钟…");
+				api("/tidywork-api/feishu/ask", { method: "POST", body: JSON.stringify({ text: askText }), timeoutMs: 150000 })
+					.then((d) => setAskResult((d && d.reply) || "没有返回内容"))
+					.catch((e) => setAskResult("失败：" + (e && e.message ? e.message : String(e))))
+					.then(() => setAsking(false));
+			};
+
+			const line = (text, color) =>
+				h("div", { style: { fontSize: 12, color: color || C.text2, lineHeight: 1.7, marginBottom: 6 } }, text);
+
+			return h(
+				"span",
+				{ style: { display: "inline-flex", alignItems: "center" } },
+				h(
+					"button",
+					{
+						type: "button",
+						onClick: () => setOpen(true),
+						title: connected ? "飞书长连接已建立" : configured ? "已配置，连接未就绪" : "配置飞书联动",
+						style: Object.assign({}, S.btnGhost, { display: "inline-flex", alignItems: "center", gap: 6, border: "1px solid " + C.border, borderRadius: 6, padding: "6px 10px" })
+					},
+					h("span", { style: { width: 7, height: 7, borderRadius: 99, background: dotColor } }),
+					status && status.bot && status.bot.name ? status.bot.name : "飞书"
+				),
+				h(
+					Modal,
+					{ open: open, title: "飞书联动", onClose: () => { setOpen(false); setResult(""); setAskResult(""); } },
+					line(
+						connected
+							? "长连接已建立" + (status && status.bot && status.bot.name ? "（" + status.bot.name + "）" : "") + "；私聊直接答，群里 @ 才答。"
+							: configured
+								? "已保存凭据，连接状态：" + ((status && status.state) || "未就绪") + (status && status.lastError ? "｜" + status.lastError : "")
+								: "还没配置。去飞书开发者后台建一个企业自建应用，开启机器人能力与长连接事件订阅，把 App ID / Secret 填进来。"
+					),
+					h(
+						Field,
+						{ label: "App ID（cli_ 开头）" },
+						h("input", {
+							style: S.input,
+							value: appId,
+							placeholder: "cli_xxxxxxxxxxxxxxxx",
+							onChange: (e) => setAppId(e.target.value),
+							spellCheck: false,
+							autoComplete: "off"
+						})
+					),
+					h(
+						Field,
+						{ label: "App Secret（留空 = 不改）" },
+						h("input", {
+							style: S.input,
+							type: "password",
+							value: secret,
+							placeholder: status && status.hasSecret ? "已保存，如需更换请重新填写" : "粘贴 App Secret",
+							onChange: (e) => setSecret(e.target.value),
+							autoComplete: "new-password",
+							spellCheck: false
+						})
+					),
+					h(
+						"div",
+						{ style: { display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 8 } },
+						h("label", { style: { fontSize: 12.5, color: C.text1, display: "flex", gap: 6, alignItems: "center" } },
+							h("input", { type: "checkbox", checked: enabled, onChange: (e) => setEnabled(e.target.checked) }),
+							"启用机器人"
+						),
+						h("label", { style: { fontSize: 12.5, color: C.text1, display: "flex", gap: 6, alignItems: "center" } },
+							h("input", { type: "checkbox", checked: requireMention, onChange: (e) => setRequireMention(e.target.checked) }),
+							"群里必须 @ 才响应"
+						)
+					),
+					h("div", { style: { fontSize: 12, fontWeight: 600, color: C.text1, margin: "10px 0 6px" } }, "提醒"),
+					h(
+						"div",
+						{ style: { display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", marginBottom: 6 } },
+						h("label", { style: { fontSize: 12.5, color: C.text1, display: "flex", gap: 6, alignItems: "center" } },
+							h("input", { type: "checkbox", checked: remindOn, onChange: (e) => setRemindOn(e.target.checked) }),
+							"开启提醒"
+						),
+						h("span", { style: { fontSize: 12, color: C.text2 } }, "早报"),
+						h("input", { style: Object.assign({}, S.input, { width: 96, padding: "4px 6px" }), type: "time", value: dailyAt, onChange: (e) => setDailyAt(e.target.value) }),
+						h("span", { style: { fontSize: 12, color: C.text2 } }, "待办"),
+						h("input", { style: Object.assign({}, S.input, { width: 96, padding: "4px 6px" }), type: "time", value: todoAt, onChange: (e) => setTodoAt(e.target.value) })
+					),
+					h(
+						"div",
+						{ style: { display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 6 } },
+						h("span", { style: { fontSize: 12, color: C.text2 } }, "会前"),
+						h("input", {
+							style: Object.assign({}, S.input, { width: 64, padding: "4px 6px" }),
+							type: "number",
+							min: 0,
+							max: 180,
+							value: lead,
+							onChange: (e) => setLead(e.target.value)
+						}),
+						h("span", { style: { fontSize: 12, color: C.text2 } }, "分钟｜免打扰"),
+						h("input", { style: Object.assign({}, S.input, { width: 96, padding: "4px 6px" }), type: "time", value: quietStart, onChange: (e) => setQuietStart(e.target.value) }),
+						h("span", { style: { fontSize: 12, color: C.text2 } }, "–"),
+						h("input", { style: Object.assign({}, S.input, { width: 96, padding: "4px 6px" }), type: "time", value: quietEnd, onChange: (e) => setQuietEnd(e.target.value) })
+					),
+					status && status.targets && status.targets.length
+						? line("已捕获 " + status.targets.length + " 个推送目标（发过消息的私聊/群会自动登记），提醒会发到这些会话。")
+						: line("还没有推送目标：先在飞书里给机器人发一句话，之后提醒会发到那个会话。"),
+					result
+						? h(
+								"div",
+								{
+									style: {
+										fontSize: 12, lineHeight: 1.7, color: C.text1, background: C.page, border: "1px solid " + C.border,
+										borderRadius: 6, padding: 8, margin: "4px 0 8px", whiteSpace: "pre-wrap", wordBreak: "break-word"
+									}
+								},
+								result
+							)
+						: null,
+					h(
+						"div",
+						{ style: Object.assign({}, S.footRow, { marginBottom: 10 }) },
+						status && (status.configured || status.appId)
+							? h("button", { type: "button", onClick: clear, disabled: saving, style: Object.assign({}, S.linkBtn, { marginRight: "auto" }) }, "清除飞书凭据")
+							: null,
+						h("button", { type: "button", onClick: test, disabled: saving || !connected, style: Object.assign({}, S.btnGhost, { opacity: connected ? 1 : 0.5 }) }, "发测试消息"),
+						h("button", { type: "button", onClick: () => { setOpen(false); setResult(""); setAskResult(""); }, style: S.btnGhost }, "关闭"),
+						h(
+							"button",
+							{ type: "button", onClick: save, disabled: saving, style: Object.assign({}, S.btnPrimary, { opacity: saving ? 0.6 : 1 }) },
+							saving ? "保存中…" : "保存并连接"
+						)
+					),
+					h("div", { style: { fontSize: 12, fontWeight: 600, color: C.text1, margin: "6px 0 6px" } }, "本地测试问答（不经过飞书）"),
+					h(
+						"div",
+						{ style: { display: "flex", gap: 8, alignItems: "center" } },
+						h("input", {
+							style: Object.assign({}, S.input, { flex: 1 }),
+							value: askText,
+							onChange: (e) => setAskText(e.target.value),
+							placeholder: "例如：明天下午三点跟产品过一版，帮我建个会议"
+						}),
+						h("button", { type: "button", onClick: localAsk, disabled: asking, style: Object.assign({}, S.btnGhost, { opacity: asking ? 0.6 : 1 }) }, asking ? "跑着…" : "问一句")
+					),
+					askResult
+						? h(
+								"div",
+								{
+									style: {
+										fontSize: 12, lineHeight: 1.7, color: C.text1, background: C.page, border: "1px solid " + C.border,
+										borderRadius: 6, padding: 8, marginTop: 6, maxHeight: 200, overflowY: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word"
+									}
+								},
+								askResult
+							)
+						: null
+				)
+			);
+		}
+
 		function DuePicker(props) {
 			const val = String(props.value || "");
 			const [open, setOpen] = useState(false);
@@ -2587,15 +2851,426 @@ window.__ModuleLoader__.load({
 			"#tw-typora .vditor-ir pre.vditor-reset:focus{background-color:color-mix(in srgb,var(--tw-ink,#15181e) 5%,transparent)!important}",
 			// 专注：只亮光标所在的那一块
 			"#tw-typora.tw-vd-focus .vditor-ir>.vditor-reset>*:not(.tw-active){opacity:.3}",
-			"#tw-typora .vditor-ir>.vditor-reset>*{transition:opacity .18s ease}"
+			"#tw-typora .vditor-ir>.vditor-reset>*{transition:opacity .18s ease}",
+			// 图片画廊：连续单图段落自动聚合成网格，只改展示层
+			"#tw-typora .tw-gallery{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:12px 0;width:100%}",
+			"#tw-typora .tw-gallery[data-count=\"3\"],#tw-typora .tw-gallery[data-count=\"4\"]{grid-template-columns:repeat(2,1fr)}",
+			"#tw-typora .tw-gallery[data-count=\"5\"],#tw-typora .tw-gallery[data-count=\"6\"]{grid-template-columns:repeat(3,1fr)}",
+			"#tw-typora .tw-gallery p{margin:0!important;width:100%}",
+			"#tw-typora .tw-gallery img{width:100%;height:auto;object-fit:cover;border-radius:8px;margin:0!important;display:block}",
+			// 表格公式结果：data-fx 属性 + 伪元素渲染，光标进入该格时隐藏，露出公式源码
+			"#tw-typora td[data-fx]::after,#tw-typora th[data-fx]::after{content:attr(data-fx);display:inline-block;margin-left:6px;font-size:12px;color:var(--tw-accent,#3370ff);font-variant-numeric:tabular-nums}",
+			"#tw-typora td:focus-within[data-fx]::after,#tw-typora th:focus-within[data-fx]::after{display:none}",
+			// Callout：按 subtype 给左侧色条，浅底圆角；深浅色都跟随 token
+			"#tw-typora blockquote.callout{border:1px solid var(--tw-rule-2,#d5d8de);border-left:3px solid var(--tw-accent,#3370ff)!important;border-radius:8px;padding:8px 14px;margin:12px 0;background:color-mix(in srgb,var(--tw-ink,#15181e) 3%,transparent)}",
+			"#tw-typora blockquote.callout .callout-info{font-weight:600;margin-bottom:2px;color:var(--tw-ink,#15181e)}",
+			"#tw-typora blockquote.callout[data-subtype=\"WARNING\"],#tw-typora blockquote.callout[data-subtype=\"CAUTION\"]{border-left-color:var(--tw-warning,#ff9500)!important}",
+			"#tw-typora blockquote.callout[data-subtype=\"IMPORTANT\"]{border-left-color:#af52de!important}",
+			"#tw-typora blockquote.callout[data-subtype=\"TIP\"]{border-left-color:var(--tw-success,#34c759)!important}"
+		].join("");
+
+		const LB_CSS = [
+			".tw-lb{position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:99999;display:none;align-items:center;justify-content:center;overflow:hidden}",
+			".tw-lb img{max-width:88vw;max-height:88vh;transition:transform .15s ease;user-select:none;-webkit-user-drag:none;cursor:grab;border-radius:8px}",
+			".tw-lb img.dragging{cursor:grabbing}",
+			".tw-lb-btn{position:absolute;top:50%;transform:translateY(-50%);background:rgba(255,255,255,.14);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:20px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1}",
+			".tw-lb-close{top:18px;right:22px;transform:none}",
+			".tw-lb-prev{left:18px}",
+			".tw-lb-next{right:18px}",
+			".tw-lb-count{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);color:#fff;font-size:13px;opacity:.8}"
 		].join("");
 
 		function ensureVdCss() {
-			if (document.getElementById("tw-vditor-theme")) return;
-			const st = document.createElement("style");
-			st.id = "tw-vditor-theme";
-			st.textContent = VD_CSS;
-			document.head.appendChild(st);
+			if (!document.getElementById("tw-vditor-theme")) {
+				const st = document.createElement("style");
+				st.id = "tw-vditor-theme";
+				st.textContent = VD_CSS;
+				document.head.appendChild(st);
+			}
+			if (!document.getElementById("tw-lightbox-css")) {
+				const lb = document.createElement("style");
+				lb.id = "tw-lightbox-css";
+				lb.textContent = LB_CSS;
+				document.head.appendChild(lb);
+			}
+		}
+
+		// ===== 笔记渲染层增强：画廊 / 表格公式 / 灯箱（纯展示层，不回写 markdown 源码）=====
+
+		// ---- 表格公式求值内核：白名单递归下降解析，不使用 eval ----
+		function twColToIndex(letters) {
+			let c = 0;
+			for (const ch of letters) c = c * 26 + (ch.charCodeAt(0) - 64);
+			return c - 1;
+		}
+		function twParseCell(ref) {
+			const m = String(ref).toUpperCase().match(/^([A-Z]+)(\d+)$/);
+			if (!m) return null;
+			return { c: twColToIndex(m[1]), r: Number(m[2]) - 1 };
+		}
+		function twNum(v) {
+			if (v == null) return NaN;
+			const s = String(v).replace(/[,，%\s]/g, "");
+			if (s === "") return 0;
+			const n = Number(s);
+			return Number.isFinite(n) ? n : NaN;
+		}
+		function twFormatNum(n) {
+			if (!Number.isFinite(n)) return "—";
+			const rounded = Math.round(n * 1e6) / 1e6;
+			return String(rounded);
+		}
+		/**
+		 * 在网格 grid[r][c]（字符串文本）上求值公式。
+		 * 支持：单元格 A1、范围 A1:B2、数字、+ - * /、括号、单目负号；
+		 * 函数 SUM / AVG / MAX / MIN / COUNT。求值失败抛错，由调用方兜底展示。
+		 */
+		function twEvalFormula(grid, formula) {
+			const src = String(formula || "").trim().replace(/^=/, "");
+			const tokens = [];
+			let i = 0;
+			while (i < src.length) {
+				const ch = src[i];
+				if (/\s/.test(ch)) { i += 1; continue; }
+				if (/[0-9.]/.test(ch)) {
+					let j = i;
+					while (j < src.length && /[0-9.]/.test(src[j])) j += 1;
+					const n = Number(src.slice(i, j));
+					if (!Number.isFinite(n)) throw new Error("数字有误");
+					tokens.push({ t: "num", v: n });
+					i = j;
+					continue;
+				}
+				if (/[A-Za-z]/.test(ch)) {
+					let j = i;
+					while (j < src.length && /[A-Za-z]/.test(src[j])) j += 1;
+					const word = src.slice(i, j).toUpperCase();
+					const rest = src.slice(j);
+					const cellM = rest.match(/^\s*(\d+)/);
+					if (/^[A-Z]+$/.test(word) && cellM) {
+						let k = j + cellM[0].length;
+						const ref = word + cellM[1];
+						const rangeM = src.slice(k).match(/^\s*:\s*([A-Z]+)(\d+)/);
+						if (rangeM) {
+							tokens.push({ t: "range", a: twParseCell(ref), b: twParseCell(rangeM[1] + rangeM[2]) });
+							k += rangeM[0].length;
+						} else {
+							tokens.push({ t: "cell", v: twParseCell(ref) });
+						}
+						i = k;
+						continue;
+					}
+					tokens.push({ t: "func", v: word });
+					i = j;
+					continue;
+				}
+				if ("+-*/(),".includes(ch)) { tokens.push({ t: ch }); i += 1; continue; }
+				throw new Error("无法识别的字符");
+			}
+			let p = 0;
+			const peek = () => tokens[p];
+			const cellValue = (ref) => {
+				if (!ref) return NaN;
+				const row = grid[ref.r];
+				return twNum(row ? row[ref.c] : undefined);
+			};
+			const rangeList = (a, b) => {
+				if (!a || !b) return [];
+				const out = [];
+				const r1 = Math.min(a.r, b.r), r2 = Math.max(a.r, b.r);
+				const c1 = Math.min(a.c, b.c), c2 = Math.max(a.c, b.c);
+				for (let r = r1; r <= r2; r += 1) for (let c = c1; c <= c2; c += 1) {
+					const row = grid[r];
+					out.push(row ? row[c] : undefined);
+				}
+				return out;
+			};
+			function parsePrimary() {
+				const tk = tokens[p];
+				if (!tk) throw new Error("公式不完整");
+				if (tk.t === "num") { p += 1; return tk.v; }
+				if (tk.t === "cell") { p += 1; return cellValue(tk.v); }
+				if (tk.t === "range") { p += 1; return rangeList(tk.a, tk.b).map((x) => twNum(x)); }
+				if (tk.t === "func") {
+					p += 1;
+					if (peek() && peek().t === "(") p += 1; else throw new Error("函数缺少括号");
+					const args = [];
+					if (!(peek() && peek().t === ")")) {
+						while (true) {
+							args.push(parseExpr());
+							if (peek() && peek().t === ",") { p += 1; continue; }
+							break;
+						}
+					}
+					if (peek() && peek().t === ")") p += 1;
+					const flat = [];
+					args.forEach((a) => (Array.isArray(a) ? flat.push(...a) : flat.push(a)));
+					if (tk.v === "COUNT") return flat.filter((x) => String(x == null ? "" : x).trim() !== "").length;
+					const nums = flat.map(twNum).filter((n) => !Number.isNaN(n));
+					switch (tk.v) {
+						case "SUM": return nums.reduce((s, n) => s + n, 0);
+						case "AVG": return nums.length ? nums.reduce((s, n) => s + n, 0) / nums.length : NaN;
+						case "MAX": return nums.length ? Math.max(...nums) : NaN;
+						case "MIN": return nums.length ? Math.min(...nums) : NaN;
+						default: throw new Error("不支持的函数 " + tk.v);
+					}
+				}
+				if (tk.t === "(") { p += 1; const v = parseExpr(); if (peek() && peek().t === ")") p += 1; return v; }
+				throw new Error("公式有误");
+			}
+			function parseUnary() {
+				if (peek() && peek().t === "-") { p += 1; return -parseUnary(); }
+				if (peek() && peek().t === "+") { p += 1; return parseUnary(); }
+				return parsePrimary();
+			}
+			function parseMulDiv() {
+				let left = parseUnary();
+				while (peek() && (peek().t === "*" || peek().t === "/")) {
+					const op = peek().t; p += 1;
+					const right = parseUnary();
+					left = op === "*" ? left * right : left / right;
+				}
+				return left;
+			}
+			function parseAddSub() {
+				let left = parseMulDiv();
+				while (peek() && (peek().t === "+" || peek().t === "-")) {
+					const op = peek().t; p += 1;
+					const right = parseMulDiv();
+					left = op === "+" ? left + right : left - right;
+				}
+				return left;
+			}
+			function parseExpr() { return parseAddSub(); }
+			const result = parseExpr();
+			if (p < tokens.length) throw new Error("公式有多余内容");
+			if (typeof result !== "number" || Number.isNaN(result)) throw new Error("结果无数值");
+			return result;
+		}
+
+		/** 单元格源码文本：结果走 data-fx 属性 + 伪元素渲染，不进文本节点，直接读 innerText 即可。 */
+		function twCellText(td) {
+			return (td.innerText || td.textContent || "").trim();
+		}
+		/** 扫描表格：= 开头的单元格在渲染态追加只读结果标签，源码原文保留；支持公式格链式合计。 */
+		function twEnhanceTables(root) {
+			root.querySelectorAll("table").forEach((table) => {
+				const trs = Array.from(table.querySelectorAll("tr"));
+				const raw = trs.map((tr) => Array.from(tr.querySelectorAll("th,td")).map((td) => twCellText(td)));
+				const res = trs.map(() => []);
+				// 第一遍：逐格求值并缓存；被引用的公式格优先用已算出的数值
+				trs.forEach((tr, r) => {
+					Array.from(tr.querySelectorAll("th,td")).forEach((td, c) => {
+						const text = raw[r][c];
+						if (!/^=/.test(text)) { res[r][c] = null; return; }
+						const grid = raw.map((row, rr) => row.map((cell, cc) =>
+							(typeof res[rr][cc] === "number" && !Number.isNaN(res[rr][cc])) ? String(res[rr][cc]) : cell
+						));
+						try { res[r][c] = twEvalFormula(grid, text); } catch (e) { res[r][c] = NaN; }
+					});
+				});
+				// 第二遍：结果写进 data-fx 属性，由 CSS 伪元素渲染；不插入子节点，避免被 Vditor 回读进 markdown 源码
+				trs.forEach((tr, r) => {
+					Array.from(tr.querySelectorAll("th,td")).forEach((td, c) => {
+						if (!/^=/.test(raw[r][c])) { delete td.dataset.fx; return; }
+						const v = res[r][c];
+						td.dataset.fx = (typeof v === "number" && !Number.isNaN(v)) ? twFormatNum(v) : "公式有误";
+						td.title = raw[r][c];
+					});
+				});
+			});
+		}
+
+		/** 连续的单图段落聚合成画廊网格；只改展示层 DOM，不动 markdown 源码。可幂等重建。 */
+		function twGroupGallery(root) {
+			// 先解包上一轮的画廊，把图片段落还原回正文直属子级
+			Array.from(root.querySelectorAll(":scope > .tw-gallery")).forEach((g) => {
+				const frag = document.createDocumentFragment();
+				while (g.firstChild) frag.appendChild(g.firstChild);
+				g.replaceWith(frag);
+			});
+			const groups = [];
+			let cur = [];
+			Array.from(root.children).forEach((node) => {
+				const isImgP = node.tagName === "P" && node.querySelector("img");
+				if (isImgP) cur.push(node);
+				else { if (cur.length) groups.push(cur); cur = []; }
+			});
+			if (cur.length) groups.push(cur);
+			groups.forEach((group) => {
+				if (group.length < 2) return;
+				const wrap = document.createElement("div");
+				wrap.className = "tw-gallery";
+				wrap.dataset.count = String(group.length);
+				group[0].before(wrap);
+				group.forEach((p) => wrap.appendChild(p));
+			});
+		}
+
+		// ---- 灯箱单例：离线无依赖，缩放 / 平移 / 切换 / Esc ----
+		const twLightbox = (() => {
+			let box = null;
+			let imgEl = null;
+			let countEl = null;
+			let imgs = [];
+			let idx = 0;
+			let scale = 1;
+			let tx = 0;
+			let ty = 0;
+			let dragging = false;
+			let moved = false;
+			let startX = 0;
+			let startY = 0;
+			let startTx = 0;
+			let startTy = 0;
+			const listeners = [];
+
+			function build() {
+				if (box) return;
+				box = document.createElement("div");
+				box.className = "tw-lb";
+				box.innerHTML =
+					'<img alt="" draggable="false" />' +
+					'<button type="button" class="tw-lb-btn tw-lb-close" aria-label="关闭">✕</button>' +
+					'<button type="button" class="tw-lb-btn tw-lb-prev" aria-label="上一张">‹</button>' +
+					'<button type="button" class="tw-lb-btn tw-lb-next" aria-label="下一张">›</button>' +
+					'<div class="tw-lb-count"></div>';
+				imgEl = box.querySelector("img");
+				countEl = box.querySelector(".tw-lb-count");
+				document.body.appendChild(box);
+
+				box.querySelector(".tw-lb-close").addEventListener("click", close);
+				box.querySelector(".tw-lb-prev").addEventListener("click", (e) => { e.stopPropagation(); step(-1); });
+				box.querySelector(".tw-lb-next").addEventListener("click", (e) => { e.stopPropagation(); step(1); });
+				box.addEventListener("click", (e) => { if (e.target === box) close(); });
+				imgEl.addEventListener("wheel", (e) => { e.preventDefault(); zoom(e.deltaY < 0 ? 1.12 : 0.89); }, { passive: false });
+				imgEl.addEventListener("dblclick", resetTransform);
+				imgEl.addEventListener("mousedown", (e) => {
+					dragging = true; moved = false;
+					startX = e.clientX; startY = e.clientY; startTx = tx; startTy = ty;
+					imgEl.classList.add("dragging");
+				});
+				document.addEventListener("mousemove", onMove);
+				document.addEventListener("mouseup", onUp);
+				document.addEventListener("keydown", onKey);
+			}
+			function onMove(e) {
+				if (!dragging) return;
+				const dx = e.clientX - startX, dy = e.clientY - startY;
+				if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
+				tx = startTx + dx; ty = startTy + dy;
+				applyTransform();
+			}
+			function onUp() {
+				dragging = false;
+				if (imgEl) imgEl.classList.remove("dragging");
+			}
+			function onKey(e) {
+				if (!box || box.style.display === "none") return;
+				if (e.key === "Escape") close();
+				else if (e.key === "ArrowLeft") step(-1);
+				else if (e.key === "ArrowRight") step(1);
+			}
+			function applyTransform() {
+				if (imgEl) imgEl.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + scale + ")";
+			}
+			function resetTransform() { scale = 1; tx = 0; ty = 0; applyTransform(); }
+			function zoom(f) {
+				scale = Math.min(4, Math.max(0.5, scale * f));
+				if (scale === 1) { tx = 0; ty = 0; }
+				applyTransform();
+			}
+			function step(d) {
+				if (!imgs.length) return;
+				idx = (idx + d + imgs.length) % imgs.length;
+				render();
+			}
+			function render() {
+				const src = imgs[idx];
+				imgEl.src = src.getAttribute("src");
+				imgEl.alt = src.getAttribute("alt") || "";
+				countEl.textContent = (idx + 1) + " / " + imgs.length;
+				resetTransform();
+			}
+			function open(list, i) {
+				build();
+				imgs = list;
+				idx = i;
+				box.style.display = "flex";
+				render();
+			}
+			function close() {
+				if (box) box.style.display = "none";
+				imgs = [];
+			}
+			function onClick(e, rootEl) {
+				const img = e.target.closest && e.target.closest("img");
+				if (!img) return;
+				const scope = (rootEl && rootEl.querySelector) ? rootEl : document;
+				const list = Array.from(scope.querySelectorAll("img"));
+				const i = list.indexOf(img);
+				if (i >= 0) open(list, i);
+			}
+			function bind(root) {
+				const handler = (e) => onClick(e, root);
+				root.addEventListener("click", handler);
+				listeners.push({ root, handler });
+			}
+			function unbind(root) {
+				for (let k = listeners.length - 1; k >= 0; k -= 1) {
+					const l = listeners[k];
+					if (l.root === root) { l.root.removeEventListener("click", l.handler); listeners.splice(k, 1); }
+				}
+			}
+			return { bind, unbind, close };
+		})();
+
+		/** 挂载渲染层增强：画廊聚合 + 表格公式；observer 防抖重建（Vditor 每次输入会重渲染正文）。返回卸载函数。 */
+		function twEnhanceNote(root) {
+			let timer = null;
+			const rerun = () => { twGroupGallery(root); twEnhanceTables(root); };
+			rerun();
+			const mo = new MutationObserver(() => { clearTimeout(timer); timer = setTimeout(rerun, 120); });
+			mo.observe(root, { childList: true, subtree: true });
+			return () => { clearTimeout(timer); mo.disconnect(); };
+		}
+
+		/** 导出当前笔记为 PDF：克隆编辑器渲染态 DOM，注入打印样式后调系统打印另存。纯前端，无新增依赖。 */
+		function printNotePdf(title, rootEl) {
+			if (!rootEl) { toast("编辑器尚未就绪，暂时无法导出"); return; }
+			const clone = rootEl.cloneNode(true);
+			// 打印只留排版，拿掉光标处露出的源码 marker
+			clone.querySelectorAll(".vditor-ir__marker").forEach((m) => m.remove());
+			const base = location.href;
+			clone.querySelectorAll("img").forEach((img) => {
+				const src = img.getAttribute("src");
+				if (!src) return;
+				try { img.setAttribute("src", new URL(src, base).href); } catch (e) {}
+			});
+			const win = window.open("", "_blank");
+			if (!win) { toast("浏览器拦截了弹出窗口，请允许后再试"); return; }
+			const safeTitle = mdEscape(title || "未命名笔记");
+			const katexCss = '<link rel="stylesheet" href="' + VD_BASE + "/dist/js/katex/katex.min.css" + '" />';
+			const css = [
+				"body{font-family:" + FONT + ";color:#15181e;max-width:820px;margin:0 auto;padding:32px;line-height:1.8}",
+				"h1{font-size:24px;margin:0 0 18px}h2{font-size:20px;margin:20px 0 10px}h3{font-size:16px;margin:16px 0 8px}",
+				"p{margin:10px 0}img{max-width:100%;border-radius:8px}",
+				".tw-gallery{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:12px 0;width:100%}.tw-gallery p{margin:0}",
+				"table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13px}th,td{border:1px solid #d5d8de;padding:6px 10px;text-align:left}",
+				"td[data-fx]::after,th[data-fx]::after{content:attr(data-fx);color:#2f5bff;margin-left:6px;font-size:12px}",
+				"blockquote.callout{border-left:3px solid #2f5bff;padding:8px 14px;border-radius:8px;background:#f6f8ff;margin:12px 0}",
+				"pre{background:#f6f7f9;border:1px solid #eee;border-radius:8px;padding:10px 12px;overflow:auto}",
+				"code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px}",
+				"@media print{body{padding:0;max-width:none}.tw-gallery,table{break-inside:avoid}}"
+			].join("");
+			win.document.write(
+				"<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'/><title>" + safeTitle + "</title>" +
+				katexCss + "<style>" + css + "</style></head><body><h1>" + safeTitle + "</h1>" +
+				clone.outerHTML + "</body></html>"
+			);
+			win.document.close();
+			win.focus();
+			setTimeout(() => { try { win.print(); } catch (e) {} }, 300);
 		}
 
 		/** 实时模式的编辑区：一个受控的外壳 + 自己管 Vditor 实例。 */
@@ -2603,6 +3278,8 @@ window.__ModuleLoader__.load({
 			const hostRef = useRef(null);
 			const vdRef = useRef(null);
 			const pushRef = useRef(false);
+			const enhanceRef = useRef(null);
+			const rootRef = useRef(null);
 			const [ready, setReady] = useState(false);
 			const [err, setErr] = useState("");
 			const [focus, setFocus] = useState(false);
@@ -2701,7 +3378,17 @@ window.__ModuleLoader__.load({
 								markdown: { sanitize: true, toc: false }
 							},
 							input: (v) => { if (!pushRef.current && props.onChange) props.onChange(v); },
-							after: () => { if (alive) setReady(true); }
+							after: () => {
+								if (!alive) return;
+								setReady(true);
+								const root = hostRef.current && hostRef.current.querySelector(".vditor-ir > .vditor-reset");
+								if (root) {
+									rootRef.current = root;
+									enhanceRef.current = twEnhanceNote(root);
+									twLightbox.bind(root);
+									if (props.onRoot) props.onRoot(root);
+								}
+							}
 						});
 					})
 					.catch((e) => {
@@ -2712,6 +3399,9 @@ window.__ModuleLoader__.load({
 					});
 				return () => {
 					alive = false;
+					if (enhanceRef.current) { try { enhanceRef.current(); } catch (e) {} enhanceRef.current = null; }
+					if (rootRef.current) twLightbox.unbind(rootRef.current);
+					rootRef.current = null;
 					const vd = vdRef.current;
 					vdRef.current = null;
 					if (vd) { try { vd.destroy(); } catch (e) {} }
@@ -2822,6 +3512,7 @@ window.__ModuleLoader__.load({
 			const taRef = useRef(null);
 			const previewRef = useRef(null);
 			const fileRef = useRef(null);
+			const editorRootRef = useRef(null);
 			const caretRef = useRef(null);
 			const actRef = useRef(null);
 			const liveCaretRef = useRef(null);
@@ -3693,6 +4384,7 @@ window.__ModuleLoader__.load({
 						onChange: (v) => { setContent(v); setDirty(true); },
 						onImage: uploadImageUrl,
 						onLink: openLinked,
+						onRoot: (root) => { editorRootRef.current = root; },
 						onFail: (msg) => toast("实时渲染加载失败：" + msg)
 					})
 				),
@@ -3702,6 +4394,7 @@ window.__ModuleLoader__.load({
 					h(Btn, { onClick: remove }, "删除"),
 					h(Btn, { onClick: tasksToTodos }, "勾选项转待办"),
 					h(Btn, { onClick: openHistory }, "历史"),
+					h(Btn, { onClick: () => printNotePdf(title, editorRootRef.current) }, "导出 PDF"),
 					h("div", { style: { flex: 1 } }),
 					h("input", { ref: fileRef, type: "file", accept: "image/*", style: { display: "none" }, onChange: (e) => { const f = e.target.files && e.target.files[0]; if (f) uploadImage(f); e.target.value = ""; } }),
 					h(Btn, { primary: true, onClick: () => saveNow(false) }, "保存")
@@ -4214,6 +4907,7 @@ window.__ModuleLoader__.load({
 							},
 							"⌘K 搜索"
 						),
+						h(FeishuBar, { onDone: reload }),
 						h(MailBar, { onDone: reload }),
 						h(MoreMenu, { onOpenRecycle: () => setRecycleOpen(true), onChanged: reload })
 					)

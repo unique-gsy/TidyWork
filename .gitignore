@@ -23,3 +23,6 @@ docs/shots-local/
 # Vditor 运行时资源必须进库：打包脚本少了它就直接失败，克隆后补不回来
 !tidywork-plugin/lib/vendor/
 !tidywork-plugin/lib/vendor/**
+
+# share-desktop 下的 vendor 由打包脚本从 tidywork-plugin 复制，不入库
+share-desktop/plugin/lib/vendor/
