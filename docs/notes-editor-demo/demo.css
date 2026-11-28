@@ -422,3 +422,41 @@ html, body {
   background: none !important;
   padding: 0 !important;
 }
+
+/* 图片画廊：连续单图段落聚合为网格（展示层，不动源码） */
+#editor .tw-gallery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin: 12px 0; width: 100%; }
+#editor .tw-gallery[data-count="5"],
+#editor .tw-gallery[data-count="6"] { grid-template-columns: repeat(3, 1fr); }
+#editor .tw-gallery p { margin: 0 !important; width: 100%; }
+#editor .tw-gallery img { width: 100%; height: auto; display: block; object-fit: cover; border-radius: 8px; margin: 0 !important; }
+
+/* 表格公式结果：data-fx 属性 + 伪元素渲染，光标进入该格时隐藏 */
+#editor td[data-fx]::after,
+#editor th[data-fx]::after { content: attr(data-fx); display: inline-block; margin-left: 6px; font-size: 12px; color: var(--tw-accent); font-variant-numeric: tabular-nums; }
+#editor td:focus-within[data-fx]::after,
+#editor th:focus-within[data-fx]::after { display: none; }
+
+/* Callout：按 subtype 左色条 + 浅底圆角 */
+#editor blockquote.callout {
+  border: 1px solid var(--tw-rule-2);
+  border-left: 3px solid var(--tw-accent) !important;
+  border-radius: 8px;
+  padding: 8px 14px;
+  margin: 12px 0;
+  background: color-mix(in srgb, var(--tw-ink) 3%, transparent);
+}
+#editor blockquote.callout .callout-info { font-weight: 600; margin-bottom: 2px; color: var(--tw-ink); }
+#editor blockquote.callout[data-subtype="WARNING"],
+#editor blockquote.callout[data-subtype="CAUTION"] { border-left-color: var(--tw-warning, #ff9500) !important; }
+#editor blockquote.callout[data-subtype="IMPORTANT"] { border-left-color: #af52de !important; }
+#editor blockquote.callout[data-subtype="TIP"] { border-left-color: var(--tw-success, #34c759) !important; }
+
+/* 灯箱（挂 body，全局样式） */
+.tw-lb { position: fixed; inset: 0; background: rgba(0,0,0,.88); z-index: 99999; display: none; align-items: center; justify-content: center; overflow: hidden; }
+.tw-lb img { max-width: 88vw; max-height: 88vh; transition: transform .15s ease; user-select: none; -webkit-user-drag: none; cursor: grab; border-radius: 8px; }
+.tw-lb img.dragging { cursor: grabbing; }
+.tw-lb-btn { position: absolute; top: 50%; transform: translateY(-50%); background: rgba(255,255,255,.14); color: #fff; border: none; border-radius: 50%; width: 40px; height: 40px; font-size: 20px; cursor: pointer; display: flex; align-items: center; justify-content: center; line-height: 1; }
+.tw-lb-close { top: 18px; right: 22px; transform: none; }
+.tw-lb-prev { left: 18px; }
+.tw-lb-next { right: 18px; }
+.tw-lb-count { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); color: #fff; font-size: 13px; opacity: .8; }
